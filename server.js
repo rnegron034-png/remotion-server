@@ -44,10 +44,12 @@ app.post("/render", async (req, res) => {
     const workDir = path.join(VIDEO_DIR, jobId);
     fs.mkdirSync(workDir);
 
-    const output = path.join(VIDEO_DIR, `${jobId}.mp4`);
-    JOBS[jobId] = { status: "downloading", file: output };
+    const videoOnly = path.join(workDir, "video.mp4");
+    const finalOut = path.join(VIDEO_DIR, `${jobId}.mp4`);
 
-    /* 1. Download clips */
+    JOBS[jobId] = { status: "downloading", file: finalOut };
+
+    // 1. Download all clips
     const localClips = [];
     for (let i = 0; i < clips.length; i++) {
       const target = path.join(workDir, `clip${i}.mp4`);
@@ -55,48 +57,43 @@ app.post("/render", async (req, res) => {
       localClips.push(target);
     }
 
-    /* 2. Build concat list */
-    const concatFile = path.join(workDir, "list.txt");
-    fs.writeFileSync(concatFile, localClips.map(f => `file '${f}'`).join("\n"));
-
-    /* 3. Download & normalize audio */
-    let audioWav = null;
-    if (audio) {
-      const audioRaw = path.join(workDir, "audio_raw");
-      audioWav = path.join(workDir, "audio.wav");
-
-      await run(`curl -L "${audio}" -o "${audioRaw}"`);
-      await run(`ffmpeg -y -i "${audioRaw}" -ac 2 -ar 44100 -vn "${audioWav}"`);
+    // 2. Remove audio from clips
+    const silentClips = [];
+    for (let i = 0; i < localClips.length; i++) {
+      const silent = path.join(workDir, `silent${i}.mp4`);
+      await run(`ffmpeg -y -i "${localClips[i]}" -an -c:v copy "${silent}"`);
+      silentClips.push(silent);
     }
+
+    // 3. Create concat list
+    const concatFile = path.join(workDir, "list.txt");
+    fs.writeFileSync(concatFile, silentClips.map(f => `file '${f}'`).join("\n"));
 
     JOBS[jobId].status = "rendering";
 
-    /* 4. Render */
-    let cmd = `ffmpeg -y -f concat -safe 0 -i "${concatFile}"`;
+    // 4. Stitch silent video
+    await run(`ffmpeg -y -f concat -safe 0 -i "${concatFile}" -c:v libx264 -pix_fmt yuv420p "${videoOnly}"`);
 
-    if (audioWav) {
-      cmd += ` -i "${audioWav}" -shortest -map 0:v:0 -map 1:a:0`;
+    // 5. Add audio (if exists)
+    if (audio) {
+      const audioRaw = path.join(workDir, "audio.raw");
+      const audioWav = path.join(workDir, "audio.wav");
+
+      await run(`curl -L "${audio}" -o "${audioRaw}"`);
+      await run(`ffmpeg -y -i "${audioRaw}" -ar 44100 -ac 2 "${audioWav}"`);
+      await run(`ffmpeg -y -i "${videoOnly}" -i "${audioWav}" -shortest -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac "${finalOut}"`);
     } else {
-      cmd += ` -map 0:v:0 -map 0:a?`;
+      fs.copyFileSync(videoOnly, finalOut);
     }
 
-    cmd += ` -c:v libx264 -pix_fmt yuv420p -c:a aac "${output}"`;
-
-    exec(cmd, (err) => {
-      if (err) {
-        console.error("FFMPEG ERROR", err);
-        JOBS[jobId].status = "error";
-      } else {
-        JOBS[jobId].status = "done";
-      }
-    });
-
+    JOBS[jobId].status = "done";
     res.json({ jobId });
   } catch (e) {
-    console.error(e);
+    console.error("RENDER ERROR", e);
     res.status(500).json({ error: "render failed" });
   }
 });
+
 
 /* ================= STATUS ================= */
 app.get("/status/:id", (req, res) => {
