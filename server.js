@@ -103,69 +103,65 @@ async function normalizeAudio(input, output) {
 async function concatVideos(listFile, audio, output) {
   console.log(`Concatenating ${audio ? 'with' : 'without'} audio...`);
 
-  const workDir = path.dirname(listFile);
-
   // Log list content
   const listContent = await fs.readFile(listFile, 'utf8');
   console.log(`List file content:\n${listContent}`);
 
-  // Verify all files in list exist (using relative basenames)
+  // Verify all files in list exist
   const lines = listContent.trim().split('\n');
   for (const line of lines) {
-    const match = line.match(/file '(.+)'/);
+    const match = line.match(/file '(.*)'/);
     if (match) {
-      const relPath = match[1];
-      const absPath = path.join(workDir, relPath);
-      if (!fsSync.existsSync(absPath)) {
-        throw new Error(`Input file not found: ${absPath}`);
+      const filePath = match[1];
+      if (!fsSync.existsSync(filePath)) {
+        throw new Error(`Input file not found: ${filePath}`);
       }
-      const stat = await fs.stat(absPath);
-      console.log(` - ${relPath}: ${(stat.size / 1024 / 1024).toFixed(2)}MB`);
+      const stat = await fs.stat(filePath);
+      console.log(` - ${path.basename(filePath)}: ${(stat.size / 1024 / 1024).toFixed(2)}MB`);
     }
   }
 
-  // Handle audio
-  let audioBase = null;
+  // Verify audio
   if (audio) {
-    audioBase = path.basename(audio);
-    const audioPath = path.join(workDir, audioBase);
-    if (!fsSync.existsSync(audioPath)) {
-      throw new Error(`Audio file not found: ${audioPath}`);
+    if (!fsSync.existsSync(audio)) {
+      throw new Error(`Audio file not found: ${audio}`);
     }
-    const audioStat = await fs.stat(audioPath);
+    const audioStat = await fs.stat(audio);
     console.log(` - Audio: ${(audioStat.size / 1024 / 1024).toFixed(2)}MB`);
   }
 
-  const outputBase = path.basename(output);
-  const relOutput = `../${outputBase}`;
+  // Build command using absolute paths
+  let cmd = `ffmpeg -y -hide_banner -loglevel warning -stats -fflags +genpts -f concat -safe 0 -i "${listFile}"`;
 
-  // Build command using relative paths + cwd
-  let cmd = `ffmpeg -y -hide_banner -loglevel warning -stats -fflags +genpts -f concat -safe 0 -i "list.txt"`;
-
-  if (audioBase) {
-    cmd += ` -i "${audioBase}" -shortest -map 0:v -map 1:a -c:a aac -b:a 192k`;
+  if (audio) {
+    cmd += ` -i "${audio}" -shortest -map 0:v -map 1:a -c:a aac -b:a 192k`;
   } else {
     cmd += ` -an -map 0:v`;
   }
 
-  cmd += ` -c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p -movflags +faststart "${relOutput}"`;
+  cmd += ` -c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p -movflags +faststart "${output}"`;
 
-  console.log(`Running concat command (cwd: ${workDir}):\n${cmd}`);
+  console.log(`Running concat command:\n${cmd}`);
 
   try {
     const { stdout, stderr } = await execAsync(cmd, {
       timeout: 600000,
       maxBuffer: 1024 * 1024 * 100,
       shell: "/bin/bash",
-      cwd: workDir,
     });
     if (stdout) console.log(`FFmpeg stdout: ${stdout}`);
     if (stderr) console.log(`FFmpeg stderr: ${stderr}`);
   } catch (error) {
-    console.error(`Concatenation failed. Command: ${cmd}`);
-    console.error(`STDOUT: ${error.stdout || 'none'}`);
-    console.error(`STDERR: ${error.stderr || error.message}`);
-    throw new Error(`Concatenation failed: ${error.stderr?.trim() || error.message}`);
+    let errMsg = 'Concatenation failed';
+    if (error.stderr) {
+      errMsg += `: ${error.stderr.trim()}`;
+    } else if (error.stdout) {
+      errMsg += `: ${error.stdout.trim()}`;
+    } else {
+      errMsg += `: ${error.message}`;
+    }
+    console.error(errMsg);
+    throw new Error(errMsg);
   }
 
   // Verify output
@@ -247,7 +243,7 @@ app.post("/render", async (req, res) => {
       JOBS[jobId] = {
         ...JOBS[jobId],
         status: "failed",
-        error: error.message,
+        error: error.message || "Unknown error during processing",
         failedAt: new Date().toISOString()
       };
     });
@@ -259,7 +255,7 @@ app.post("/render", async (req, res) => {
       JOBS[jobId] = {
         ...JOBS[jobId],
         status: "failed",
-        error: error.message,
+        error: error.message || "Unknown initialization error",
         failedAt: new Date().toISOString()
       };
     }
@@ -322,8 +318,8 @@ async function processRenderJob(jobId, workDir, clips, audio) {
     console.log(`\n🎬 Creating final video...`);
     JOBS[jobId].progress = 80;
 
-    // Use basenames only in list.txt
-    const listContent = normalizedClips.map(f => `file '${path.basename(f)}'`).join("\n");
+    // Use absolute paths in list.txt
+    const listContent = normalizedClips.map(f => `file '${f}'`).join("\n");
     const listPath = path.join(workDir, "list.txt");
     await fs.writeFile(listPath, listContent, "utf8");
 
@@ -361,7 +357,7 @@ async function processRenderJob(jobId, workDir, clips, audio) {
     JOBS[jobId] = {
       ...JOBS[jobId],
       status: "failed",
-      error: error.message,
+      error: error.message || "Unknown error",
       failedAt: new Date().toISOString()
     };
 
@@ -437,6 +433,7 @@ app.use((err, req, res, next) => {
 process.on("SIGTERM", async () => {
   console.log("\n🛑 SIGTERM received, shutting down...");
 
+  const server = app.listen(PORT); // Note: this is just to get the server var if needed, but actually defined below
   server.close(async () => {
     console.log("Server closed");
 
