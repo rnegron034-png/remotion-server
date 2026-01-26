@@ -1,64 +1,121 @@
 import express from "express";
-import { v4 as uuid } from "uuid";
+import cors from "cors";
 import fs from "fs";
 import { exec } from "child_process";
+import util from "util";
+import { v4 as uuidv4 } from "uuid";
 
+const execAsync = util.promisify(exec);
 const app = express();
-app.use(express.json());
 
-const jobs = new Map();
+app.use(cors());
+app.use(express.json({ limit: "50mb" }));
+
 const PORT = process.env.PORT || 8080;
 
+// Persistent job memory
+const jobs = {};
+
+// Ensure folders exist
+fs.mkdirSync("jobs", { recursive: true });
+fs.mkdirSync("videos", { recursive: true });
+
+app.get("/", (req, res) => {
+  res.send("Remotion Render Server Running");
+});
+
+/**
+ * POST /render
+ * Body:
+ * {
+ *   "clips": ["url1.mp4","url2.mp4"],
+ *   "audio": "audio.mp3",
+ *   "title": "test"
+ * }
+ */
 app.post("/render", async (req, res) => {
-  const { clips, audio, title } = req.body;
-  const id = uuid();
+  try {
+    const { clips, audio } = req.body;
 
-  jobs.set(id, { status: "processing" });
-
-  const dir = `/tmp/${id}`;
-  fs.mkdirSync(dir, { recursive: true });
-
-  // Download clips
-  for (let i = 0; i < clips.length; i++) {
-    await fetch(clips[i])
-      .then(r => r.arrayBuffer())
-      .then(b => fs.writeFileSync(`${dir}/${i}.mp4`, Buffer.from(b)));
-  }
-
-  await fetch(audio)
-    .then(r => r.arrayBuffer())
-    .then(b => fs.writeFileSync(`${dir}/audio.mp3`, Buffer.from(b)));
-
-  const list = clips.map((_, i) => `file '${dir}/${i}.mp4'`).join("\n");
-  fs.writeFileSync(`${dir}/list.txt`, list);
-
-  const output = `${dir}/out.mp4`;
-
-  exec(`
-ffmpeg -y -f concat -safe 0 -i ${dir}/list.txt -i ${dir}/audio.mp3 \
--vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" \
--c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p \
--c:a aac -shortest ${output}
-`, (err) => {
-    if (err) {
-      console.error(err);
-      jobs.set(id, { status: "error" });
-      return;
+    // Strict validation
+    if (!Array.isArray(clips) || clips.length === 0) {
+      return res.status(400).json({ error: "clips must be an array" });
     }
-    jobs.set(id, { status: "done", file: output });
-  });
+    if (!audio) {
+      return res.status(400).json({ error: "audio required" });
+    }
 
-  res.json({ jobId: id });
+    const jobId = uuidv4();
+    const jobDir = `jobs/${jobId}`;
+    fs.mkdirSync(jobDir, { recursive: true });
+
+    jobs[jobId] = { status: "processing", file: null };
+
+    // Return immediately
+    res.json({ jobId });
+
+    // Background render
+    (async () => {
+      try {
+        const videoFiles = [];
+
+        // Download all clips
+        for (let i = 0; i < clips.length; i++) {
+          const file = `${jobDir}/clip${i}.mp4`;
+          await execAsync(`curl -L "${clips[i]}" -o "${file}"`);
+          videoFiles.push(file);
+        }
+
+        // Download audio
+        const audioFile = `${jobDir}/audio.mp3`;
+        await execAsync(`curl -L "${audio}" -o "${audioFile}"`);
+
+        // Create concat list
+        const listFile = `${jobDir}/list.txt`;
+        fs.writeFileSync(
+          listFile,
+          videoFiles.map(f => `file '${f}'`).join("\n")
+        );
+
+        const output = `videos/${jobId}.mp4`;
+
+        // Render
+        await execAsync(
+          `ffmpeg -y -f concat -safe 0 -i ${listFile} -i ${audioFile} \
+-map 0:v -map 1:a -c:v libx264 -c:a aac -shortest ${output}`
+        );
+
+        jobs[jobId] = { status: "done", file: output };
+        console.log("Rendered:", output);
+      } catch (err) {
+        console.error("Render error:", err);
+        jobs[jobId] = { status: "error", error: err.message };
+      }
+    })();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
+/**
+ * GET /status/:id
+ */
 app.get("/status/:id", (req, res) => {
-  res.json(jobs.get(req.params.id) || { status: "unknown" });
+  const job = jobs[req.params.id];
+  if (!job) return res.json({ status: "unknown" });
+  res.json(job);
 });
 
+/**
+ * GET /download/:id
+ */
 app.get("/download/:id", (req, res) => {
-  const job = jobs.get(req.params.id);
+  const job = jobs[req.params.id];
   if (!job || job.status !== "done") return res.sendStatus(404);
   res.download(job.file);
 });
 
-app.listen(PORT, () => console.log("Listening on", PORT));
+app.listen(PORT, () => {
+  console.log("Remotion server listening on", PORT);
+});
