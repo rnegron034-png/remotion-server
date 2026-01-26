@@ -1,30 +1,32 @@
 import express from "express";
+import { bundle } from "@remotion/bundler";
 import { renderMedia } from "@remotion/renderer";
-import path from "path";
 import fs from "fs";
 
 const app = express();
 app.use(express.json());
 
 app.post("/render", async (req, res) => {
-  try {
-    const { clips, audio, subtitles, title } = req.body;
+  const { clips, audio, title } = req.body;
 
-    const out = `/tmp/${Date.now()}.mp4`;
+  const bundleLocation = await bundle({
+    entryPoint: "./video/index.jsx",
+  });
 
-    await renderMedia({
-      entryPoint: path.resolve("./video/index.jsx"),
-      composition: "Short",
-      serveUrl: "https://remotionbundle.vercel.app",
-      codec: "h264",
-      outputLocation: out,
-      inputProps: { clips, audio, subtitles, title }
-    });
+  const output = `/tmp/${title}.mp4`;
 
-    res.json({ url: out });
-  } catch (err) {
-    res.status(500).json({ error: err.toString() });
-  }
+  await renderMedia({
+    codec: "h264",
+    serveUrl: bundleLocation,
+    composition: "MainVideo",
+    outputLocation: output,
+    inputProps: {
+      clips,
+      audio
+    }
+  });
+
+  res.sendFile(output);
 });
 
-app.listen(3000, () => console.log("Remotion server running"));
+app.listen(3000);
