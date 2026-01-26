@@ -16,86 +16,96 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 const VIDEO_DIR = path.join(__dirname, "videos");
 const MAX_CLIPS = 50;
-const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB
-const DOWNLOAD_TIMEOUT = 120000; // 2 minutes
-const RENDER_TIMEOUT = 600000; // 10 minutes
-const JOB_RETENTION = 3600000; // 1 hour
+const MAX_FILE_SIZE = 500 * 1024 * 1024;
+const DOWNLOAD_TIMEOUT = 120000;
+const RENDER_TIMEOUT = 600000;
+const JOB_RETENTION = 3600000;
 
-// Middleware
 app.use(cors());
 app.use(express.json({ limit: "100mb" }));
 
-// Job storage
 const JOBS = {};
 
-// Ensure video directory exists
 if (!fsSync.existsSync(VIDEO_DIR)) {
   fsSync.mkdirSync(VIDEO_DIR, { recursive: true });
 }
 
 /* ================= UTILITIES ================= */
 
-/**
- * Execute command with proper error handling
- */
 function execCommand(command, args = [], options = {}) {
   return new Promise((resolve, reject) => {
     const timeout = options.timeout || 300000;
     
     console.log(`Executing: ${command} ${args.join(" ")}`);
     
+    // CRITICAL FIX: Use 'inherit' for stdin to prevent blocking
     const child = spawn(command, args, {
       shell: false,
-      stdio: ['ignore', 'pipe', 'pipe'], // IMPORTANT: ignore stdin
+      stdio: ['inherit', 'pipe', 'pipe'], // Changed from 'ignore' to 'inherit'
       ...options
     });
     
     let stdout = "";
     let stderr = "";
+    let lastUpdate = Date.now();
     
     child.stdout?.on("data", (data) => {
       stdout += data.toString();
     });
     
     child.stderr?.on("data", (data) => {
-      stderr += data.toString();
-      // Log progress for debugging
-      if (stderr.includes("frame=")) {
-        const match = stderr.match(/frame=\s*(\d+)/);
-        if (match) {
-          process.stdout.write(`\rProcessing frame ${match[1]}...`);
+      const chunk = data.toString();
+      stderr += chunk;
+      lastUpdate = Date.now();
+      
+      // Only log progress occasionally
+      if (chunk.includes("frame=")) {
+        const match = chunk.match(/frame=\s*(\d+)/);
+        if (match && parseInt(match[1]) % 30 === 0) {
+          console.log(`  Progress: frame ${match[1]}`);
         }
       }
     });
     
     const timer = setTimeout(() => {
+      console.error(`Timeout after ${timeout}ms, killing process`);
       child.kill("SIGKILL");
-      reject(new Error(`Command timeout after ${timeout}ms`));
+      reject(new Error(`Timeout after ${timeout}ms`));
     }, timeout);
+    
+    // Stall detection: if no data for 60 seconds, kill it
+    const stallChecker = setInterval(() => {
+      if (Date.now() - lastUpdate > 60000) {
+        console.error("Process stalled, killing");
+        clearInterval(stallChecker);
+        clearTimeout(timer);
+        child.kill("SIGKILL");
+        reject(new Error("Process stalled"));
+      }
+    }, 10000);
     
     child.on("error", (error) => {
       clearTimeout(timer);
+      clearInterval(stallChecker);
       reject(new Error(`Process error: ${error.message}`));
     });
     
     child.on("close", (code) => {
       clearTimeout(timer);
-      process.stdout.write("\n"); // Clear progress line
+      clearInterval(stallChecker);
       
       if (code === 0) {
         resolve({ stdout, stderr });
       } else {
+        const errorLog = stderr.slice(-1000);
         console.error(`Command failed with code ${code}`);
-        console.error("STDERR:", stderr.slice(-500)); // Last 500 chars
-        reject(new Error(`Command exited with code ${code}`));
+        console.error("Last 1000 chars of stderr:", errorLog);
+        reject(new Error(`Command failed with exit code ${code}`));
       }
     });
   });
 }
 
-/**
- * Download file with validation
- */
 async function downloadFile(url, outputPath) {
   if (!url || typeof url !== "string") {
     throw new Error("Invalid URL");
@@ -111,10 +121,11 @@ async function downloadFile(url, outputPath) {
     "-L",
     "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "--max-filesize", String(MAX_FILE_SIZE),
+    "--connect-timeout", "30",
     "--max-time", "120",
-    "--fail", // Fail on HTTP errors
-    "--silent", // Silent mode
-    "--show-error", // But show errors
+    "--fail",
+    "--silent",
+    "--show-error",
     "-o", outputPath,
     url
   ], { timeout: DOWNLOAD_TIMEOUT });
@@ -128,51 +139,57 @@ async function downloadFile(url, outputPath) {
     await fs.unlink(outputPath);
     throw new Error("File exceeds maximum size");
   }
+  
+  console.log(`  Downloaded: ${(stats.size / 1024 / 1024).toFixed(2)}MB`);
 }
 
-/**
- * Validate media file
- */
 async function validateMedia(filePath) {
   try {
-    await execCommand("ffprobe", [
+    const result = await execCommand("ffprobe", [
       "-v", "error",
       "-show_entries", "format=duration",
       "-of", "default=noprint_wrappers=1:nokey=1",
       filePath
     ], { timeout: 30000 });
+    
+    const duration = parseFloat(result.stdout.trim());
+    if (duration > 0) {
+      console.log(`  Duration: ${duration.toFixed(2)}s`);
+    }
   } catch (error) {
     throw new Error(`Invalid media: ${error.message}`);
   }
 }
 
-/**
- * Normalize video - FIXED with -nostdin
- */
 async function normalizeVideo(inputPath, outputPath) {
   await execCommand("ffmpeg", [
-    "-nostdin", // ✅ CRITICAL FIX: Prevent interactive mode
+    "-hide_banner",           // ✅ Hide banner
+    "-nostdin",              // ✅ No stdin
+    "-loglevel", "error",    // ✅ Only show errors
     "-y",
     "-i", inputPath,
     "-map", "0:v:0",
     "-an",
     "-c:v", "libx264",
-    "-preset", "fast",
+    "-preset", "ultrafast",   // ✅ Changed from 'fast' to 'ultrafast'
     "-crf", "23",
     "-pix_fmt", "yuv420p",
-    "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:-1:-1",
-    "-r", "30",
+    "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:-1:-1,fps=30",
     "-movflags", "+faststart",
+    "-max_muxing_queue_size", "9999", // ✅ Increase buffer
     outputPath
   ], { timeout: 300000 });
+  
+  // Verify output
+  const stats = await fs.stat(outputPath);
+  console.log(`  Output: ${(stats.size / 1024 / 1024).toFixed(2)}MB`);
 }
 
-/**
- * Normalize audio - FIXED with -nostdin
- */
 async function normalizeAudio(inputPath, outputPath) {
   await execCommand("ffmpeg", [
-    "-nostdin", // ✅ CRITICAL FIX
+    "-hide_banner",
+    "-nostdin",
+    "-loglevel", "error",
     "-y",
     "-i", inputPath,
     "-vn",
@@ -180,16 +197,16 @@ async function normalizeAudio(inputPath, outputPath) {
     "-ar", "48000",
     "-c:a", "aac",
     "-b:a", "192k",
+    "-max_muxing_queue_size", "9999",
     outputPath
   ], { timeout: 120000 });
 }
 
-/**
- * Concatenate videos - FIXED with -nostdin
- */
 async function concatenateVideos(listPath, audioPath, outputPath) {
   const args = [
-    "-nostdin", // ✅ CRITICAL FIX
+    "-hide_banner",
+    "-nostdin",
+    "-loglevel", "error",
     "-y",
     "-f", "concat",
     "-safe", "0",
@@ -208,15 +225,13 @@ async function concatenateVideos(listPath, audioPath, outputPath) {
     "-b:a", "192k",
     "-pix_fmt", "yuv420p",
     "-movflags", "+faststart",
+    "-max_muxing_queue_size", "9999",
     outputPath
   );
   
   await execCommand("ffmpeg", args, { timeout: RENDER_TIMEOUT });
 }
 
-/**
- * Clean up job files
- */
 async function cleanupJob(jobId) {
   try {
     const workDir = path.join(VIDEO_DIR, jobId);
@@ -228,9 +243,6 @@ async function cleanupJob(jobId) {
   }
 }
 
-/**
- * Update job status
- */
 function updateJobStatus(jobId, status, extra = {}) {
   JOBS[jobId] = {
     ...JOBS[jobId],
@@ -321,11 +333,12 @@ app.post("/render", async (req, res) => {
 
 async function processRenderJob(jobId, workDir, clips, audio) {
   try {
+    console.log(`\n🎬 Starting job ${jobId}`);
     updateJobStatus(jobId, "downloading");
     const normalizedClips = [];
     
     for (let i = 0; i < clips.length; i++) {
-      console.log(`\n📥 Processing clip ${i + 1}/${clips.length}`);
+      console.log(`\n📥 Clip ${i + 1}/${clips.length}`);
       
       const rawPath = path.join(workDir, `raw_${i}.mp4`);
       const normalizedPath = path.join(workDir, `clip_${i}.mp4`);
@@ -347,9 +360,10 @@ async function processRenderJob(jobId, workDir, clips, audio) {
           progress: Math.round(((i + 1) / clips.length) * 50)
         });
         
-        console.log(`  ✅ Clip ${i + 1} complete`);
+        console.log(`  ✅ Complete`);
       } catch (error) {
-        throw new Error(`Clip ${i + 1} failed: ${error.message}`);
+        console.error(`  ❌ Failed:`, error.message);
+        throw new Error(`Clip ${i + 1}: ${error.message}`);
       }
     }
     
@@ -387,7 +401,7 @@ async function processRenderJob(jobId, workDir, clips, audio) {
       throw new Error("Output video is empty");
     }
     
-    console.log(`\n✅ Render complete! Size: ${(outputStats.size / 1024 / 1024).toFixed(2)}MB`);
+    console.log(`\n✅ Success! ${(outputStats.size / 1024 / 1024).toFixed(2)}MB`);
     
     updateJobStatus(jobId, "done", { 
       file: outputPath,
@@ -399,6 +413,7 @@ async function processRenderJob(jobId, workDir, clips, audio) {
     await cleanupJob(jobId);
     
     setTimeout(() => {
+      console.log(`🗑️  Cleaning up job ${jobId}`);
       delete JOBS[jobId];
       fs.unlink(outputPath).catch(console.error);
     }, JOB_RETENTION);
@@ -456,14 +471,10 @@ app.get("/download/:id", async (req, res) => {
       return res.status(404).json({ error: "Video file not found" });
     }
     
-    res.download(job.file, `video_${jobId}.mp4`, (err) => {
-      if (err) {
-        console.error(`Download error for job ${jobId}:`, err);
-      }
-    });
+    res.download(job.file, `video_${jobId}.mp4`);
     
   } catch (error) {
-    console.error("Download endpoint error:", error);
+    console.error("Download error:", error);
     res.status(500).json({ error: "Download failed" });
   }
 });
@@ -481,7 +492,7 @@ app.use((req, res) => {
 });
 
 process.on("SIGTERM", async () => {
-  console.log("SIGTERM received, shutting down gracefully");
+  console.log("\n🛑 SIGTERM received, shutting down...");
   
   server.close(async () => {
     console.log("Server closed");
@@ -494,15 +505,14 @@ process.on("SIGTERM", async () => {
   });
   
   setTimeout(() => {
-    console.error("Forced shutdown");
+    console.error("⚠️  Forced shutdown");
     process.exit(1);
   }, 30000);
 });
 
 const server = app.listen(PORT, () => {
-  console.log(`✅ Video render server running on port ${PORT}`);
+  console.log(`✅ Video render server on port ${PORT}`);
   console.log(`📁 Video directory: ${VIDEO_DIR}`);
-  console.log(`⏱️  Job retention: ${JOB_RETENTION / 1000}s`);
 });
 
 export default app;
