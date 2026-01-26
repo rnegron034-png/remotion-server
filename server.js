@@ -101,24 +101,85 @@ async function normalizeAudio(input, output) {
 
 // FIXED: Better concat with error handling
 async function concatVideos(listFile, audio, output) {
-  console.log(`  Concatenating ${audio ? 'with' : 'without'} audio...`);
-  
-  // Verify list file exists and has content
-  const listContent = await fs.readFile(listFile, 'utf8');
-  console.log(`  List file content:\n${listContent}`);
-  
-  // Verify all files in list exist
+  console.log(` Concatenating ${audio ? 'with' : 'without'} audio...`);
+
+  const workDir = path.dirname(listFile);
+
+  // Verify list file
+  const listContentRaw = await fs.readFile(listFile, 'utf8');
+  console.log(` List file content:\n${listContentRaw}`);
+
+  // Use RELATIVE paths in list.txt to avoid absolute path issues
+  const listContent = normalizedClips.map(f => 
+    `file '${path.relative(workDir, f)}'`
+  ).join('\n');
+  await fs.writeFile(listFile, listContent, 'utf8');  // overwrite with relative
+
+  // Verify files (relative now)
   const lines = listContent.trim().split('\n');
   for (const line of lines) {
     const match = line.match(/file '(.+)'/);
     if (match) {
-      const filePath = match[1];
-      if (!fsSync.existsSync(filePath)) {
-        throw new Error(`Input file not found: ${filePath}`);
+      const relPath = match[1];
+      const absPath = path.join(workDir, relPath);
+      if (!fsSync.existsSync(absPath)) {
+        throw new Error(`Input file not found: ${absPath}`);
       }
-      const stat = await fs.stat(filePath);
-      console.log(`  - ${path.basename(filePath)}: ${(stat.size / 1024 / 1024).toFixed(2)}MB`);
+      const stat = await fs.stat(absPath);
+      console.log(` - ${relPath}: ${(stat.size / 1024 / 1024).toFixed(2)}MB`);
     }
+  }
+
+  if (audio) {
+    if (!fsSync.existsSync(audio)) {
+      throw new Error(`Audio file not found: ${audio}`);
+    }
+    const audioStat = await fs.stat(audio);
+    console.log(` - Audio: ${(audioStat.size / 1024 / 1024).toFixed(2)}MB`);
+  }
+
+  // Build command with relative inputs/outputs
+  let cmd = `ffmpeg -y -hide_banner -loglevel warning -stats -f concat -safe 0 -fflags +genpts -i "${path.relative(workDir, listFile)}"`;
+
+  let audioMap = '';
+  if (audio) {
+    const relAudio = path.relative(workDir, audio);
+    cmd += ` -i "${relAudio}" -shortest`;
+    audioMap = ' -map 0:v:0 -map 1:a:0 -c:a aac -b:a 192k';
+  } else {
+    audioMap = ' -an';  // ensure no audio if none provided
+  }
+
+  const relOutput = path.relative(workDir, output);
+  cmd += ` -map 0:v:0 ${audioMap} -c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p -movflags +faststart "${relOutput}"`;
+
+  console.log(` Running concat command from cwd ${workDir}:\n${cmd}`);
+
+  try {
+    const { stdout, stderr } = await execAsync(cmd, {
+      timeout: 600000,
+      maxBuffer: 1024 * 1024 * 100,
+      shell: "/bin/bash",
+      cwd: workDir,               // ← key: run FFmpeg from workDir
+    });
+    console.log(` FFmpeg stdout: ${stdout}`);
+    if (stderr) console.log(` FFmpeg stderr: ${stderr}`);
+  } catch (error) {
+    console.error(`Concat failed. Full command: ${cmd}`);
+    console.error(`STDOUT: ${error.stdout || 'none'}`);
+    console.error(`STDERR: ${error.stderr || error.message}`);
+    throw new Error(`Concatenation failed: ${error.stderr?.trim() || error.message}`);
+  }
+
+  // Verify output
+  const absOutput = path.join(workDir, relOutput);
+  const outputStat = await fs.stat(absOutput);
+  if (outputStat.size === 0) {
+    throw new Error("Concatenated video is empty");
+  }
+
+  console.log(` ✅ Concatenation complete: ${(outputStat.size / 1024 / 1024).toFixed(2)}MB`);
+}
   }
   
   // Verify audio exists if provided
