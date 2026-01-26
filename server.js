@@ -9,6 +9,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 const execAsync = promisify(exec);
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -26,96 +27,89 @@ if (!fsSync.existsSync(VIDEO_DIR)) {
 const JOBS = {};
 
 async function execCommand(cmd, timeout = 300000) {
-  console.log(`Executing: ${cmd.substring(0, 100)}...`);
+  console.log(`Executing: ${cmd.substring(0, 200)}...`);
   try {
     const { stdout, stderr } = await execAsync(cmd, {
       timeout,
       maxBuffer: 1024 * 1024 * 100,
       shell: "/bin/bash",
     });
+    if (stderr) console.log(`STDERR: ${stderr}`);
     return { stdout, stderr };
   } catch (error) {
     console.error(`Command failed: ${error.message}`);
-    if (error.stderr) {
-      console.error(`STDERR: ${error.stderr}`);
-    }
+    if (error.stderr) console.error(`STDERR: ${error.stderr}`);
+    if (error.stdout) console.error(`STDOUT: ${error.stdout}`);
     throw error;
   }
 }
 
 async function downloadFile(url, output) {
-  console.log(`  Downloading: ${url}`);
-  
+  console.log(`Downloading: ${url}`);
+
   const cmd = `curl -L --max-time 120 --fail --silent --show-error -A "Mozilla/5.0" -o "${output}" "${url}"`;
   await execCommand(cmd, 120000);
-  
+
   const stat = await fs.stat(output);
   if (stat.size === 0) {
     throw new Error("Downloaded file is empty");
   }
-  
-  console.log(`  Downloaded: ${(stat.size / 1024 / 1024).toFixed(2)}MB`);
+
+  console.log(`Downloaded: ${(stat.size / 1024 / 1024).toFixed(2)}MB`);
 }
 
 async function repairMp4(input, output) {
-  console.log(`  Repairing MP4...`);
-  
+  console.log(`Repairing MP4...`);
+
   const cmd = `ffmpeg -y -hide_banner -loglevel error -err_detect ignore_err -i "${input}" -map 0:v:0? -map 0:a:0? -c copy -movflags +faststart "${output}"`;
-  
+
   try {
     await execCommand(cmd, 60000);
-    console.log(`  Repaired successfully`);
+    console.log(`Repaired successfully`);
   } catch (error) {
-    console.log(`  Repair skipped, using original`);
+    console.log(`Repair failed/skipped, using original`);
     await fs.rename(input, output);
   }
 }
 
 async function normalizeVideo(input, output) {
-  console.log(`  Normalizing video...`);
-  
+  console.log(`Normalizing video...`);
+
   const cmd = `ffmpeg -y -hide_banner -loglevel error -fflags +genpts -i "${input}" \
     -map 0:v:0 -vsync cfr -r 30 \
     -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" \
     -c:v libx264 -preset ultrafast -crf 23 -pix_fmt yuv420p \
     -movflags +faststart -an "${output}"`;
-  
+
   await execCommand(cmd, 300000);
-  
+
   const stat = await fs.stat(output);
   if (stat.size === 0) {
     throw new Error("Normalized video is empty");
   }
-  
-  console.log(`  Normalized: ${(stat.size / 1024 / 1024).toFixed(2)}MB`);
+
+  console.log(`Normalized: ${(stat.size / 1024 / 1024).toFixed(2)}MB`);
 }
 
 async function normalizeAudio(input, output) {
-  console.log(`  Normalizing audio...`);
-  
+  console.log(`Normalizing audio...`);
+
   const cmd = `ffmpeg -y -hide_banner -loglevel error -i "${input}" -vn -ac 2 -ar 48000 -c:a aac -b:a 192k "${output}"`;
-  
+
   await execCommand(cmd, 120000);
-  console.log(`  Audio normalized`);
+  console.log(`Audio normalized`);
 }
 
-// FIXED: Better concat with error handling
 async function concatVideos(listFile, audio, output) {
-  console.log(` Concatenating ${audio ? 'with' : 'without'} audio...`);
+  console.log(`Concatenating ${audio ? 'with' : 'without'} audio...`);
 
   const workDir = path.dirname(listFile);
 
-  // Verify list file
-  const listContentRaw = await fs.readFile(listFile, 'utf8');
-  console.log(` List file content:\n${listContentRaw}`);
+  // Log list content
+  const listContent = await fs.readFile(listFile, 'utf8');
+  console.log(`List file content:\n${listContent}`);
 
-  // Use RELATIVE paths in list.txt to avoid absolute path issues
-  const listContent = normalizedClips.map(f => 
-    `file '${path.relative(workDir, f)}'`
-  ).join('\n');
-  await fs.writeFile(listFile, listContent, 'utf8');  // overwrite with relative
-
-  // Verify files (relative now)
+  // Verify all files in list exist (using relative basenames)
   const lines = listContent.trim().split('\n');
   for (const line of lines) {
     const match = line.match(/file '(.+)'/);
@@ -130,94 +124,57 @@ async function concatVideos(listFile, audio, output) {
     }
   }
 
+  // Handle audio
+  let audioBase = null;
   if (audio) {
-    if (!fsSync.existsSync(audio)) {
-      throw new Error(`Audio file not found: ${audio}`);
+    audioBase = path.basename(audio);
+    const audioPath = path.join(workDir, audioBase);
+    if (!fsSync.existsSync(audioPath)) {
+      throw new Error(`Audio file not found: ${audioPath}`);
     }
-    const audioStat = await fs.stat(audio);
+    const audioStat = await fs.stat(audioPath);
     console.log(` - Audio: ${(audioStat.size / 1024 / 1024).toFixed(2)}MB`);
   }
 
-  // Build command with relative inputs/outputs
-  let cmd = `ffmpeg -y -hide_banner -loglevel warning -stats -f concat -safe 0 -fflags +genpts -i "${path.relative(workDir, listFile)}"`;
+  const outputBase = path.basename(output);
+  const relOutput = `../${outputBase}`;
 
-  let audioMap = '';
-  if (audio) {
-    const relAudio = path.relative(workDir, audio);
-    cmd += ` -i "${relAudio}" -shortest`;
-    audioMap = ' -map 0:v:0 -map 1:a:0 -c:a aac -b:a 192k';
+  // Build command using relative paths + cwd
+  let cmd = `ffmpeg -y -hide_banner -loglevel warning -stats -fflags +genpts -f concat -safe 0 -i "list.txt"`;
+
+  if (audioBase) {
+    cmd += ` -i "${audioBase}" -shortest -map 0:v -map 1:a -c:a aac -b:a 192k`;
   } else {
-    audioMap = ' -an';  // ensure no audio if none provided
+    cmd += ` -an -map 0:v`;
   }
 
-  const relOutput = path.relative(workDir, output);
-  cmd += ` -map 0:v:0 ${audioMap} -c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p -movflags +faststart "${relOutput}"`;
+  cmd += ` -c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p -movflags +faststart "${relOutput}"`;
 
-  console.log(` Running concat command from cwd ${workDir}:\n${cmd}`);
+  console.log(`Running concat command (cwd: ${workDir}):\n${cmd}`);
 
   try {
     const { stdout, stderr } = await execAsync(cmd, {
       timeout: 600000,
       maxBuffer: 1024 * 1024 * 100,
       shell: "/bin/bash",
-      cwd: workDir,               // ← key: run FFmpeg from workDir
+      cwd: workDir,
     });
-    console.log(` FFmpeg stdout: ${stdout}`);
-    if (stderr) console.log(` FFmpeg stderr: ${stderr}`);
+    if (stdout) console.log(`FFmpeg stdout: ${stdout}`);
+    if (stderr) console.log(`FFmpeg stderr: ${stderr}`);
   } catch (error) {
-    console.error(`Concat failed. Full command: ${cmd}`);
+    console.error(`Concatenation failed. Command: ${cmd}`);
     console.error(`STDOUT: ${error.stdout || 'none'}`);
     console.error(`STDERR: ${error.stderr || error.message}`);
     throw new Error(`Concatenation failed: ${error.stderr?.trim() || error.message}`);
   }
 
   // Verify output
-  const absOutput = path.join(workDir, relOutput);
-  const outputStat = await fs.stat(absOutput);
-  if (outputStat.size === 0) {
-    throw new Error("Concatenated video is empty");
-  }
-
-  console.log(` ✅ Concatenation complete: ${(outputStat.size / 1024 / 1024).toFixed(2)}MB`);
-}
-  }
-  
-  // Verify audio exists if provided
-  if (audio) {
-    if (!fsSync.existsSync(audio)) {
-      throw new Error(`Audio file not found: ${audio}`);
-    }
-    const audioStat = await fs.stat(audio);
-    console.log(`  - Audio: ${(audioStat.size / 1024 / 1024).toFixed(2)}MB`);
-  }
-  
-  // Build command with proper escaping
-  let cmd = `ffmpeg -y -hide_banner -loglevel warning -stats -f concat -safe 0 -i "${listFile}"`;
-  
-  if (audio) {
-    cmd += ` -i "${audio}" -shortest -map 0:v:0 -map 1:a:0`;
-  } else {
-    cmd += ` -map 0:v:0`;
-  }
-  
-  cmd += ` -c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p`;
-  
-  if (audio) {
-    cmd += ` -c:a aac -b:a 192k`;
-  }
-  
-  cmd += ` -movflags +faststart "${output}"`;
-  
-  console.log(`  Running concat command...`);
-  await execCommand(cmd, 600000);
-  
-  // Verify output
   const outputStat = await fs.stat(output);
   if (outputStat.size === 0) {
     throw new Error("Concatenated video is empty");
   }
-  
-  console.log(`  ✅ Concatenation complete: ${(outputStat.size / 1024 / 1024).toFixed(2)}MB`);
+
+  console.log(`✅ Concatenation complete: ${(outputStat.size / 1024 / 1024).toFixed(2)}MB`);
 }
 
 async function cleanupJob(jobId) {
@@ -225,7 +182,7 @@ async function cleanupJob(jobId) {
     const workDir = path.join(VIDEO_DIR, jobId);
     if (fsSync.existsSync(workDir)) {
       await fs.rm(workDir, { recursive: true, force: true });
-      console.log(`  Cleaned up work directory`);
+      console.log(`Cleaned up work directory for ${jobId}`);
     }
   } catch (error) {
     console.error(`Cleanup failed: ${error.message}`);
@@ -233,11 +190,10 @@ async function cleanupJob(jobId) {
 }
 
 /* ================= ROUTES ================= */
-
 app.get("/health", (req, res) => {
   const activeJobs = Object.values(JOBS).filter(j => j.status === "processing").length;
-  
-  res.json({ 
+
+  res.json({
     ok: true,
     totalJobs: Object.keys(JOBS).length,
     activeJobs,
@@ -247,45 +203,45 @@ app.get("/health", (req, res) => {
 
 app.post("/render", async (req, res) => {
   const jobId = uuidv4();
-  
+
   try {
     const { clips, audio } = req.body;
-    
+
     if (!clips || !Array.isArray(clips) || clips.length === 0) {
       return res.status(400).json({ error: "clips array is required" });
     }
-    
+
     if (clips.length > 50) {
       return res.status(400).json({ error: "Maximum 50 clips allowed" });
     }
-    
+
     for (const url of clips) {
       if (!url || typeof url !== "string" || !url.startsWith("http")) {
         return res.status(400).json({ error: "Invalid clip URL" });
       }
     }
-    
-    if (audio && (!audio.startsWith("http"))) {
+
+    if (audio && (typeof audio !== "string" || !audio.startsWith("http"))) {
       return res.status(400).json({ error: "Invalid audio URL" });
     }
-    
+
     const workDir = path.join(VIDEO_DIR, jobId);
     await fs.mkdir(workDir, { recursive: true });
-    
-    JOBS[jobId] = { 
+
+    JOBS[jobId] = {
       status: "processing",
       totalClips: clips.length,
       hasAudio: !!audio,
       createdAt: new Date().toISOString(),
       progress: 0
     };
-    
-    res.json({ 
+
+    res.json({
       jobId,
       status: "processing",
       message: "Job started successfully"
     });
-    
+
     processRenderJob(jobId, workDir, clips, audio).catch(error => {
       console.error(`\n❌ Job ${jobId} failed:`, error.message);
       JOBS[jobId] = {
@@ -295,10 +251,10 @@ app.post("/render", async (req, res) => {
         failedAt: new Date().toISOString()
       };
     });
-    
+
   } catch (error) {
     console.error(`Job initialization failed:`, error);
-    
+
     if (JOBS[jobId]) {
       JOBS[jobId] = {
         ...JOBS[jobId],
@@ -307,80 +263,81 @@ app.post("/render", async (req, res) => {
         failedAt: new Date().toISOString()
       };
     }
-    
-    res.status(500).json({ 
+
+    res.status(500).json({
       error: "Failed to start render job",
-      details: error.message 
+      details: error.message
     });
   }
 });
 
 async function processRenderJob(jobId, workDir, clips, audio) {
   console.log(`\n🎬 Starting job ${jobId}`);
-  console.log(`   Clips: ${clips.length}, Audio: ${!!audio}`);
-  
+  console.log(`Clips: ${clips.length}, Audio: ${!!audio}`);
+
   try {
     const normalizedClips = [];
-    
+
     for (let i = 0; i < clips.length; i++) {
       console.log(`\n📥 Processing clip ${i + 1}/${clips.length}`);
-      
+
       const rawPath = path.join(workDir, `raw_${i}.mp4`);
       const fixedPath = path.join(workDir, `fixed_${i}.mp4`);
       const normalizedPath = path.join(workDir, `clip_${i}.mp4`);
-      
+
       try {
         await downloadFile(clips[i], rawPath);
         await repairMp4(rawPath, fixedPath);
         await fs.unlink(rawPath).catch(() => {});
         await normalizeVideo(fixedPath, normalizedPath);
         await fs.unlink(fixedPath).catch(() => {});
-        
+
         normalizedClips.push(normalizedPath);
         JOBS[jobId].progress = Math.round(((i + 1) / clips.length) * 60);
-        
-        console.log(`  ✅ Clip ${i + 1} complete`);
-        
+
+        console.log(`✅ Clip ${i + 1} complete`);
+
       } catch (error) {
         throw new Error(`Clip ${i + 1} failed: ${error.message}`);
       }
     }
-    
+
     let audioFile = null;
     if (audio) {
       console.log(`\n🎵 Processing audio...`);
-      
+
       const rawAudioPath = path.join(workDir, "raw_audio");
       const normalizedAudioPath = path.join(workDir, "audio.m4a");
-      
+
       await downloadFile(audio, rawAudioPath);
       await normalizeAudio(rawAudioPath, normalizedAudioPath);
       await fs.unlink(rawAudioPath).catch(() => {});
-      
+
       audioFile = normalizedAudioPath;
       JOBS[jobId].progress = 70;
-      
-      console.log(`  ✅ Audio complete`);
+
+      console.log(`✅ Audio complete`);
     }
-    
+
     console.log(`\n🎬 Creating final video...`);
     JOBS[jobId].progress = 80;
-    
-    const listContent = normalizedClips.map(f => `file '${f}'`).join("\n");
+
+    // Use basenames only in list.txt
+    const listContent = normalizedClips.map(f => `file '${path.basename(f)}'`).join("\n");
     const listPath = path.join(workDir, "list.txt");
     await fs.writeFile(listPath, listContent, "utf8");
-    
+
     const finalPath = path.join(VIDEO_DIR, `${jobId}.mp4`);
     await concatVideos(listPath, audioFile, finalPath);
-    
+
     const finalStats = await fs.stat(finalPath);
     if (finalStats.size === 0) {
       throw new Error("Final video is empty");
     }
-    
+
     console.log(`\n✅ Job ${jobId} complete!`);
-    console.log(`   Size: ${(finalStats.size / 1024 / 1024).toFixed(2)}MB`);
-    
+    console.log(`Size: ${(finalStats.size / 1024 / 1024).toFixed(2)}MB`);
+
     JOBS[jobId] = {
       ...JOBS[jobId],
       status: "done",
@@ -389,25 +346,25 @@ async function processRenderJob(jobId, workDir, clips, audio) {
       progress: 100,
       completedAt: new Date().toISOString()
     };
-    
+
     await cleanupJob(jobId);
-    
+
     setTimeout(() => {
-      console.log(`🗑️  Auto-cleaning job ${jobId}`);
+      console.log(`🗑️ Auto-cleaning job ${jobId}`);
       delete JOBS[jobId];
       fs.unlink(finalPath).catch(() => {});
     }, 3600000);
-    
+
   } catch (error) {
     console.error(`\n❌ Job ${jobId} failed:`, error.message);
-    
+
     JOBS[jobId] = {
       ...JOBS[jobId],
       status: "failed",
       error: error.message,
       failedAt: new Date().toISOString()
     };
-    
+
     await cleanupJob(jobId);
     throw error;
   }
@@ -415,49 +372,49 @@ async function processRenderJob(jobId, workDir, clips, audio) {
 
 app.get("/status/:id", (req, res) => {
   const jobId = req.params.id;
-  
+
   if (!jobId || !/^[a-f0-9-]{36}$/i.test(jobId)) {
     return res.status(400).json({ error: "Invalid job ID" });
   }
-  
+
   const job = JOBS[jobId];
-  
+
   if (!job) {
-    return res.json({ 
+    return res.json({
       status: "unknown",
       message: "Job not found or expired"
     });
   }
-  
+
   const { file, ...safeJob } = job;
   res.json(safeJob);
 });
 
 app.get("/download/:id", (req, res) => {
   const jobId = req.params.id;
-  
+
   if (!jobId || !/^[a-f0-9-]{36}$/i.test(jobId)) {
     return res.status(400).json({ error: "Invalid job ID" });
   }
-  
+
   const job = JOBS[jobId];
-  
+
   if (!job) {
     return res.status(404).json({ error: "Job not found" });
   }
-  
+
   if (job.status !== "done") {
-    return res.status(400).json({ 
+    return res.status(400).json({
       error: "Video not ready",
       status: job.status,
       progress: job.progress || 0
     });
   }
-  
+
   if (!job.file || !fsSync.existsSync(job.file)) {
     return res.status(404).json({ error: "Video file not found" });
   }
-  
+
   res.download(job.file, `video_${jobId}.mp4`, (err) => {
     if (err) {
       console.error(`Download error:`, err);
@@ -471,27 +428,27 @@ app.use((req, res) => {
 
 app.use((err, req, res, next) => {
   console.error("Unhandled error:", err);
-  res.status(500).json({ 
+  res.status(500).json({
     error: "Internal server error",
-    message: err.message 
+    message: err.message
   });
 });
 
 process.on("SIGTERM", async () => {
   console.log("\n🛑 SIGTERM received, shutting down...");
-  
+
   server.close(async () => {
     console.log("Server closed");
-    
+
     for (const jobId of Object.keys(JOBS)) {
       await cleanupJob(jobId).catch(() => {});
     }
-    
+
     process.exit(0);
   });
-  
+
   setTimeout(() => {
-    console.error("⚠️  Forced shutdown");
+    console.error("⚠️ Forced shutdown");
     process.exit(1);
   }, 30000);
 });
