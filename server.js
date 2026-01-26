@@ -6,59 +6,55 @@ import { exec } from "child_process";
 const app = express();
 app.use(express.json());
 
-const jobs = {};
+const jobs = new Map();
+const PORT = process.env.PORT || 3000;
 
 app.post("/render", async (req, res) => {
   const { clips, audio, title } = req.body;
+
   const jobId = uuidv4();
-  jobs[jobId] = { status: "processing" };
+  const out = `videos/${jobId}.mp4`;
+  fs.mkdirSync("videos", { recursive: true });
 
-  const workDir = `/tmp/${jobId}`;
-  fs.mkdirSync(workDir);
+  jobs.set(jobId, { status: "processing", file: out });
 
-  // Download clips
-  for (let i = 0; i < clips.length; i++) {
-    exec(`curl -L "${clips[i]}" -o ${workDir}/${i}.mp4`);
-  }
-
-  exec(`curl -L "${audio}" -o ${workDir}/audio.mp3`);
-
-  setTimeout(() => {
-    const list = clips.map((_, i) => `file '${i}.mp4'`).join("\n");
-    fs.writeFileSync(`${workDir}/list.txt`, list);
-
-    const output = `${workDir}/final.mp4`;
-
-    const cmd = `
-      ffmpeg -y -f concat -safe 0 -i ${workDir}/list.txt \
-      -i ${workDir}/audio.mp3 \
-      -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" \
-      -map 0:v -map 1:a \
-      -c:v libx264 -preset veryfast -crf 22 \
-      -c:a aac -shortest \
-      ${output}
-    `;
-
-    exec(cmd, (err) => {
-      if (err) {
-        jobs[jobId].status = "error";
-        return;
-      }
-      jobs[jobId] = { status: "done", file: output };
-    });
-  }, 8000);
+  runRender(jobId, clips, audio, out);
 
   res.json({ jobId });
 });
 
 app.get("/status/:id", (req, res) => {
-  res.json(jobs[req.params.id] || { status: "unknown" });
+  const job = jobs.get(req.params.id);
+  if (!job) return res.json({ status: "unknown" });
+  res.json(job);
 });
 
 app.get("/download/:id", (req, res) => {
-  const job = jobs[req.params.id];
-  if (!job || job.status !== "done") return res.status(404).end();
+  const job = jobs.get(req.params.id);
+  if (!job || !fs.existsSync(job.file)) return res.sendStatus(404);
   res.download(job.file);
 });
 
-app.listen(3000, () => console.log("Remotion server running"));
+function runRender(jobId, clips, audio, out) {
+  const list = clips.map(c => `file '${c}'`).join("\n");
+  fs.writeFileSync("list.txt", list);
+
+  const cmd = `
+ffmpeg -y -f concat -safe 0 -i list.txt -i "${audio}" \
+-vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" \
+-c:v libx264 -preset ultrafast -crf 28 -pix_fmt yuv420p \
+-c:a aac -shortest "${out}"
+`;
+
+  exec(cmd, (err) => {
+    if (err) {
+      jobs.set(jobId, { status: "error", file: out });
+    } else {
+      jobs.set(jobId, { status: "done", file: out });
+    }
+  });
+}
+
+app.listen(PORT, () => {
+  console.log("Remotion server listening on", PORT);
+});
