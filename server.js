@@ -25,7 +25,7 @@ const JOB_RETENTION = 3600000; // 1 hour
 app.use(cors());
 app.use(express.json({ limit: "100mb" }));
 
-// Job storage with automatic cleanup
+// Job storage
 const JOBS = {};
 
 // Ensure video directory exists
@@ -36,16 +36,17 @@ if (!fsSync.existsSync(VIDEO_DIR)) {
 /* ================= UTILITIES ================= */
 
 /**
- * Execute command with proper error handling and timeout
+ * Execute command with proper error handling
  */
 function execCommand(command, args = [], options = {}) {
   return new Promise((resolve, reject) => {
-    const timeout = options.timeout || 300000; // 5 min default
+    const timeout = options.timeout || 300000;
     
     console.log(`Executing: ${command} ${args.join(" ")}`);
     
     const child = spawn(command, args, {
       shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'], // IMPORTANT: ignore stdin
       ...options
     });
     
@@ -58,10 +59,17 @@ function execCommand(command, args = [], options = {}) {
     
     child.stderr?.on("data", (data) => {
       stderr += data.toString();
+      // Log progress for debugging
+      if (stderr.includes("frame=")) {
+        const match = stderr.match(/frame=\s*(\d+)/);
+        if (match) {
+          process.stdout.write(`\rProcessing frame ${match[1]}...`);
+        }
+      }
     });
     
     const timer = setTimeout(() => {
-      child.kill("SIGTERM");
+      child.kill("SIGKILL");
       reject(new Error(`Command timeout after ${timeout}ms`));
     }, timeout);
     
@@ -72,26 +80,27 @@ function execCommand(command, args = [], options = {}) {
     
     child.on("close", (code) => {
       clearTimeout(timer);
+      process.stdout.write("\n"); // Clear progress line
       
       if (code === 0) {
         resolve({ stdout, stderr });
       } else {
-        console.error(`Command failed with code ${code}:`, stderr);
-        reject(new Error(`Command failed: ${stderr || "Unknown error"}`));
+        console.error(`Command failed with code ${code}`);
+        console.error("STDERR:", stderr.slice(-500)); // Last 500 chars
+        reject(new Error(`Command exited with code ${code}`));
       }
     });
   });
 }
 
 /**
- * Download file with validation and error handling
+ * Download file with validation
  */
 async function downloadFile(url, outputPath) {
   if (!url || typeof url !== "string") {
     throw new Error("Invalid URL");
   }
   
-  // Validate URL format
   try {
     new URL(url);
   } catch {
@@ -103,11 +112,13 @@ async function downloadFile(url, outputPath) {
     "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "--max-filesize", String(MAX_FILE_SIZE),
     "--max-time", "120",
+    "--fail", // Fail on HTTP errors
+    "--silent", // Silent mode
+    "--show-error", // But show errors
     "-o", outputPath,
     url
   ], { timeout: DOWNLOAD_TIMEOUT });
   
-  // Verify file was downloaded
   const stats = await fs.stat(outputPath);
   if (stats.size === 0) {
     throw new Error("Downloaded file is empty");
@@ -120,7 +131,7 @@ async function downloadFile(url, outputPath) {
 }
 
 /**
- * Validate media file with ffprobe
+ * Validate media file
  */
 async function validateMedia(filePath) {
   try {
@@ -131,15 +142,16 @@ async function validateMedia(filePath) {
       filePath
     ], { timeout: 30000 });
   } catch (error) {
-    throw new Error(`Invalid media file: ${error.message}`);
+    throw new Error(`Invalid media: ${error.message}`);
   }
 }
 
 /**
- * Normalize video to consistent format
+ * Normalize video - FIXED with -nostdin
  */
 async function normalizeVideo(inputPath, outputPath) {
   await execCommand("ffmpeg", [
+    "-nostdin", // ✅ CRITICAL FIX: Prevent interactive mode
     "-y",
     "-i", inputPath,
     "-map", "0:v:0",
@@ -150,15 +162,17 @@ async function normalizeVideo(inputPath, outputPath) {
     "-pix_fmt", "yuv420p",
     "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:-1:-1",
     "-r", "30",
+    "-movflags", "+faststart",
     outputPath
   ], { timeout: 300000 });
 }
 
 /**
- * Normalize audio to consistent format
+ * Normalize audio - FIXED with -nostdin
  */
 async function normalizeAudio(inputPath, outputPath) {
   await execCommand("ffmpeg", [
+    "-nostdin", // ✅ CRITICAL FIX
     "-y",
     "-i", inputPath,
     "-vn",
@@ -171,10 +185,11 @@ async function normalizeAudio(inputPath, outputPath) {
 }
 
 /**
- * Concatenate videos with optional audio
+ * Concatenate videos - FIXED with -nostdin
  */
 async function concatenateVideos(listPath, audioPath, outputPath) {
   const args = [
+    "-nostdin", // ✅ CRITICAL FIX
     "-y",
     "-f", "concat",
     "-safe", "0",
@@ -227,9 +242,6 @@ function updateJobStatus(jobId, status, extra = {}) {
 
 /* ================= ROUTES ================= */
 
-/**
- * Health check endpoint
- */
 app.get("/health", (req, res) => {
   const activeJobs = Object.values(JOBS).filter(j => 
     j.status === "downloading" || j.status === "rendering"
@@ -243,9 +255,6 @@ app.get("/health", (req, res) => {
   });
 });
 
-/**
- * Render video endpoint
- */
 app.post("/render", async (req, res) => {
   const jobId = uuidv4();
   let workDir;
@@ -253,7 +262,6 @@ app.post("/render", async (req, res) => {
   try {
     const { clips, audio } = req.body;
     
-    // Validation
     if (!Array.isArray(clips) || clips.length === 0) {
       return res.status(400).json({ error: "clips array is required" });
     }
@@ -264,7 +272,6 @@ app.post("/render", async (req, res) => {
       });
     }
     
-    // Validate all URLs
     for (const url of clips) {
       if (typeof url !== "string" || !url.startsWith("http")) {
         return res.status(400).json({ error: "Invalid clip URL" });
@@ -275,25 +282,21 @@ app.post("/render", async (req, res) => {
       return res.status(400).json({ error: "Invalid audio URL" });
     }
     
-    // Create work directory
     workDir = path.join(VIDEO_DIR, jobId);
     await fs.mkdir(workDir, { recursive: true });
     
-    // Initialize job
     updateJobStatus(jobId, "downloading", { 
       totalClips: clips.length,
       hasAudio: !!audio,
       createdAt: new Date().toISOString()
     });
     
-    // Send immediate response
     res.json({ 
       jobId, 
       status: "processing",
-      estimatedTime: clips.length * 30 + 60 // rough estimate in seconds
+      estimatedTime: clips.length * 30 + 60
     });
     
-    // Process asynchronously
     processRenderJob(jobId, workDir, clips, audio).catch(error => {
       console.error(`Job ${jobId} failed:`, error);
       updateJobStatus(jobId, "failed", { 
@@ -316,40 +319,45 @@ app.post("/render", async (req, res) => {
   }
 });
 
-/**
- * Process render job asynchronously
- */
 async function processRenderJob(jobId, workDir, clips, audio) {
   try {
-    // Download and normalize video clips
     updateJobStatus(jobId, "downloading");
     const normalizedClips = [];
     
     for (let i = 0; i < clips.length; i++) {
+      console.log(`\n📥 Processing clip ${i + 1}/${clips.length}`);
+      
       const rawPath = path.join(workDir, `raw_${i}.mp4`);
       const normalizedPath = path.join(workDir, `clip_${i}.mp4`);
       
       try {
+        console.log(`  Downloading...`);
         await downloadFile(clips[i], rawPath);
-        await validateMedia(rawPath);
-        await normalizeVideo(rawPath, normalizedPath);
-        normalizedClips.push(normalizedPath);
         
-        // Delete raw file to save space
+        console.log(`  Validating...`);
+        await validateMedia(rawPath);
+        
+        console.log(`  Normalizing...`);
+        await normalizeVideo(rawPath, normalizedPath);
+        
+        normalizedClips.push(normalizedPath);
         await fs.unlink(rawPath);
         
         updateJobStatus(jobId, "downloading", {
           progress: Math.round(((i + 1) / clips.length) * 50)
         });
+        
+        console.log(`  ✅ Clip ${i + 1} complete`);
       } catch (error) {
-        throw new Error(`Clip ${i} failed: ${error.message}`);
+        throw new Error(`Clip ${i + 1} failed: ${error.message}`);
       }
     }
     
-    // Download and normalize audio if provided
     let normalizedAudio = null;
     if (audio) {
+      console.log(`\n🎵 Processing audio...`);
       updateJobStatus(jobId, "downloading", { progress: 60 });
+      
       const rawAudioPath = path.join(workDir, "raw_audio");
       const normalizedAudioPath = path.join(workDir, "audio.m4a");
       
@@ -359,27 +367,28 @@ async function processRenderJob(jobId, workDir, clips, audio) {
       normalizedAudio = normalizedAudioPath;
       
       await fs.unlink(rawAudioPath);
+      console.log(`  ✅ Audio complete`);
     }
     
-    // Create concat list
+    console.log(`\n🎬 Rendering final video...`);
     updateJobStatus(jobId, "rendering", { progress: 70 });
+    
     const listPath = path.join(workDir, "list.txt");
     const listContent = normalizedClips
       .map(f => `file '${f}'`)
       .join("\n");
     await fs.writeFile(listPath, listContent, "utf8");
     
-    // Render final video
     const outputPath = path.join(VIDEO_DIR, `${jobId}.mp4`);
     await concatenateVideos(listPath, normalizedAudio, outputPath);
     
-    // Verify output exists
     const outputStats = await fs.stat(outputPath);
     if (outputStats.size === 0) {
       throw new Error("Output video is empty");
     }
     
-    // Success
+    console.log(`\n✅ Render complete! Size: ${(outputStats.size / 1024 / 1024).toFixed(2)}MB`);
+    
     updateJobStatus(jobId, "done", { 
       file: outputPath,
       fileSize: outputStats.size,
@@ -387,17 +396,15 @@ async function processRenderJob(jobId, workDir, clips, audio) {
       completedAt: new Date().toISOString()
     });
     
-    // Cleanup work directory
     await cleanupJob(jobId);
     
-    // Schedule job deletion after retention period
     setTimeout(() => {
       delete JOBS[jobId];
       fs.unlink(outputPath).catch(console.error);
     }, JOB_RETENTION);
     
   } catch (error) {
-    console.error(`Processing job ${jobId} failed:`, error);
+    console.error(`\n❌ Job ${jobId} failed:`, error.message);
     updateJobStatus(jobId, "failed", { 
       error: error.message,
       failedAt: new Date().toISOString()
@@ -407,9 +414,6 @@ async function processRenderJob(jobId, workDir, clips, audio) {
   }
 }
 
-/**
- * Get job status
- */
 app.get("/status/:id", (req, res) => {
   const jobId = req.params.id;
   
@@ -423,14 +427,10 @@ app.get("/status/:id", (req, res) => {
     return res.json({ status: "unknown" });
   }
   
-  // Don't expose internal file paths
   const { file, ...safeJob } = job;
   res.json(safeJob);
 });
 
-/**
- * Download rendered video
- */
 app.get("/download/:id", async (req, res) => {
   try {
     const jobId = req.params.id;
@@ -468,9 +468,6 @@ app.get("/download/:id", async (req, res) => {
   }
 });
 
-/**
- * Error handling middleware
- */
 app.use((err, req, res, next) => {
   console.error("Unhandled error:", err);
   res.status(500).json({ 
@@ -479,24 +476,16 @@ app.use((err, req, res, next) => {
   });
 });
 
-/**
- * 404 handler
- */
 app.use((req, res) => {
   res.status(404).json({ error: "Not found" });
 });
 
-/**
- * Graceful shutdown
- */
 process.on("SIGTERM", async () => {
   console.log("SIGTERM received, shutting down gracefully");
   
-  // Stop accepting new requests
   server.close(async () => {
     console.log("Server closed");
     
-    // Cleanup all jobs
     for (const jobId of Object.keys(JOBS)) {
       await cleanupJob(jobId).catch(console.error);
     }
@@ -504,16 +493,12 @@ process.on("SIGTERM", async () => {
     process.exit(0);
   });
   
-  // Force shutdown after 30 seconds
   setTimeout(() => {
     console.error("Forced shutdown");
     process.exit(1);
   }, 30000);
 });
 
-/**
- * Start server
- */
 const server = app.listen(PORT, () => {
   console.log(`✅ Video render server running on port ${PORT}`);
   console.log(`📁 Video directory: ${VIDEO_DIR}`);
