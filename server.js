@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import { v4 as uuidv4 } from "uuid";
-import { execFile } from "child_process";
+import { exec } from "child_process";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -14,145 +14,137 @@ app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 
 const PORT = process.env.PORT || 8080;
-
-/* ================================
-   GLOBAL STATE
-================================ */
 const JOBS = {};
 const VIDEO_DIR = path.join(__dirname, "videos");
-fs.mkdirSync(VIDEO_DIR, { recursive: true });
+if (!fs.existsSync(VIDEO_DIR)) fs.mkdirSync(VIDEO_DIR);
 
-/* ================================
+/* =====================
    HEALTH
-================================ */
+===================== */
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
     uptime: process.uptime(),
-    memory: process.memoryUsage().rss,
-    jobs: Object.keys(JOBS).length
+    jobs: Object.keys(JOBS).length,
   });
 });
 
 app.get("/", (req, res) => {
-  res.json({ status: "Remotion server running" });
+  res.json({ status: "Remotion Server Online" });
 });
 
-/* ================================
+/* =====================
    POST /render
-================================ */
+===================== */
 app.post("/render", async (req, res) => {
   try {
     const { clips, audio } = req.body;
 
     if (!Array.isArray(clips) || clips.length === 0) {
-      return res.status(400).json({ error: "clips must be a non-empty array" });
+      return res.status(400).json({ error: "clips must be an array" });
     }
 
     const jobId = uuidv4();
     const workDir = path.join(VIDEO_DIR, jobId);
     fs.mkdirSync(workDir, { recursive: true });
 
-    const output = path.join(VIDEO_DIR, `${jobId}.mp4`);
-    JOBS[jobId] = { status: "downloading", file: output };
+    JOBS[jobId] = { status: "downloading" };
 
-    /* =============================
-       Download clips
-    ============================== */
-    const localClips = [];
+    // ---- Download & normalize all clips ----
+    const normalized = [];
 
     for (let i = 0; i < clips.length; i++) {
-      const target = path.join(workDir, `clip${i}.mp4`);
-      await download(clips[i], target);
-      localClips.push(target);
+      const raw = path.join(workDir, `raw_${i}.mp4`);
+      const clean = path.join(workDir, `clean_${i}.mp4`);
+
+      await execPromise(`curl -L "${clips[i]}" -o "${raw}"`);
+
+      // Re-encode to stable H264 + AAC
+      await execPromise(
+        `ffmpeg -y -i "${raw}" -vf scale=1280:720 -r 30 -c:v libx264 -pix_fmt yuv420p -c:a aac "${clean}"`
+      );
+
+      normalized.push(clean);
     }
 
-    /* =============================
-       Download audio
-    ============================== */
-    let audioFile = null;
-    if (audio) {
-      audioFile = path.join(workDir, "audio.mp3");
-      await download(audio, audioFile);
-    }
-
-    /* =============================
-       Build concat file
-    ============================== */
+    // ---- Build concat list ----
     const listFile = path.join(workDir, "list.txt");
-    fs.writeFileSync(
-      listFile,
-      localClips.map(f => `file '${f.replace(/'/g, "'\\''")}'`).join("\n")
+    fs.writeFileSync(listFile, normalized.map(f => `file '${f}'`).join("\n"));
+
+    const videoNoAudio = path.join(workDir, "video.mp4");
+    await execPromise(
+      `ffmpeg -y -f concat -safe 0 -i "${listFile}" -c copy "${videoNoAudio}"`
     );
 
-    JOBS[jobId].status = "rendering";
+    // ---- Optional Audio ----
+    let finalOutput = path.join(VIDEO_DIR, `${jobId}.mp4`);
 
-    /* =============================
-       Run ffmpeg (non-blocking)
-    ============================== */
-    const args = [
-      "-y",
-      "-f", "concat",
-      "-safe", "0",
-      "-i", listFile
-    ];
+    if (audio) {
+      const audioFile = path.join(workDir, "audio.mp3");
 
-    if (audioFile) {
-      args.push("-i", audioFile, "-shortest", "-map", "0:v:0", "-map", "1:a:0");
+      await execPromise(`curl -L "${audio}" -o "${audioFile}"`);
+
+      // Rebuild audio to safe AAC
+      const cleanAudio = path.join(workDir, "audio.aac");
+      await execPromise(`ffmpeg -y -i "${audioFile}" -c:a aac "${cleanAudio}"`);
+
+      await execPromise(
+        `ffmpeg -y -i "${videoNoAudio}" -i "${cleanAudio}" -shortest -c:v copy -c:a aac "${finalOutput}"`
+      );
+    } else {
+      fs.copyFileSync(videoNoAudio, finalOutput);
     }
 
-    args.push("-c:v", "libx264", "-pix_fmt", "yuv420p", output);
-
-    execFile("ffmpeg", args, (err) => {
-      if (err) {
-        console.error("FFMPEG ERROR", err);
-        JOBS[jobId].status = "error";
-      } else {
-        JOBS[jobId].status = "done";
-      }
-    });
+    JOBS[jobId] = {
+      status: "done",
+      file: finalOutput,
+    };
 
     res.json({ jobId });
 
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "render failed" });
+    console.error("RENDER FAILED:", err);
+    res.status(500).json({ error: "Render failed" });
   }
 });
 
-/* ================================
-   GET /status/:id
-================================ */
+/* =====================
+   STATUS
+===================== */
 app.get("/status/:id", (req, res) => {
   const job = JOBS[req.params.id];
   if (!job) return res.json({ status: "unknown" });
   res.json(job);
 });
 
-/* ================================
-   GET /download/:id
-================================ */
+/* =====================
+   DOWNLOAD
+===================== */
 app.get("/download/:id", (req, res) => {
   const job = JOBS[req.params.id];
   if (!job || job.status !== "done") return res.sendStatus(404);
   res.download(job.file);
 });
 
-/* ================================
-   Downloader
-================================ */
-function download(url, target) {
-  return new Promise((resolve, reject) => {
-    execFile("curl", ["-L", url, "-o", target], (err) => {
-      if (err) reject(err);
-      else resolve();
-    });
-  });
-}
-
-/* ================================
+/* =====================
    START
-================================ */
+===================== */
 app.listen(PORT, () => {
   console.log("Remotion server listening on", PORT);
 });
+
+/* =====================
+   Helper
+===================== */
+function execPromise(cmd) {
+  return new Promise((resolve, reject) => {
+    exec(cmd, (err, stdout, stderr) => {
+      if (err) {
+        console.error(stderr);
+        reject(err);
+      } else {
+        resolve(stdout);
+      }
+    });
+  });
+}
