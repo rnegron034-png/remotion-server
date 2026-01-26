@@ -31,38 +31,67 @@ app.get("/", (req, res) => {
 ================================ */
 app.post("/render", async (req, res) => {
   try {
-    const { clips, audio, title } = req.body;
+    const { clips, audio } = req.body;
 
     if (!Array.isArray(clips) || clips.length === 0) {
-      return res.status(400).json({ error: "clips must be an array of video URLs" });
+      return res.status(400).json({ error: "clips must be array" });
     }
 
     const jobId = uuidv4();
-    const output = path.join(VIDEO_DIR, `${jobId}.mp4`);
+    const workDir = path.join(VIDEO_DIR, jobId);
+    fs.mkdirSync(workDir);
 
+    JOBS[jobId] = { status: "downloading" };
+
+    // 1️⃣ Download all clips locally
+    const localClips = [];
+
+    for (let i = 0; i < clips.length; i++) {
+      const target = path.join(workDir, `clip${i}.mp4`);
+      await new Promise((resolve, reject) => {
+        exec(`curl -L "${clips[i]}" -o "${target}"`, (e) => {
+          if (e) reject(e);
+          else resolve();
+        });
+      });
+      localClips.push(target);
+    }
+
+    // 2️⃣ Download audio if exists
+    let audioFile = null;
+    if (audio) {
+      audioFile = path.join(workDir, "audio.mp3");
+      await new Promise((resolve, reject) => {
+        exec(`curl -L "${audio}" -o "${audioFile}"`, (e) => {
+          if (e) reject(e);
+          else resolve();
+        });
+      });
+    }
+
+    // 3️⃣ Build concat list
+    const concatFile = path.join(workDir, "list.txt");
+    fs.writeFileSync(concatFile, localClips.map(f => `file '${f}'`).join("\n"));
+
+    const output = path.join(VIDEO_DIR, `${jobId}.mp4`);
     JOBS[jobId] = { status: "rendering", file: output };
 
-    // Create concat file
-    const concatFile = path.join(VIDEO_DIR, `${jobId}.txt`);
-    const list = clips.map(c => `file '${c}'`).join("\n");
-    fs.writeFileSync(concatFile, list);
-
-    // Build ffmpeg command
+    // 4️⃣ Run ffmpeg
     let cmd = `ffmpeg -y -f concat -safe 0 -i "${concatFile}"`;
 
-    if (audio) {
-      cmd += ` -i "${audio}" -shortest -map 0:v:0 -map 1:a:0`;
+    if (audioFile) {
+      cmd += ` -i "${audioFile}" -shortest -map 0:v:0 -map 1:a:0`;
     }
 
     cmd += ` -c:v libx264 -pix_fmt yuv420p "${output}"`;
 
-    exec(cmd, (error, stdout, stderr) => {
-      if (error) {
+    exec(cmd, (err, stdout, stderr) => {
+      if (err) {
         console.error(stderr);
         JOBS[jobId].status = "error";
-        return;
+      } else {
+        JOBS[jobId].status = "done";
       }
-      JOBS[jobId].status = "done";
     });
 
     res.json({ jobId });
