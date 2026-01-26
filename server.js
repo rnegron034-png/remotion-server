@@ -55,6 +55,8 @@ ffmpeg -y -f concat -safe 0 -i list.txt -i "${audio}" \
   });
 }
 
+const PORT = process.env.PORT || 8080;
+
 app.listen(PORT, () => {
   console.log("Remotion server listening on", PORT);
 });
