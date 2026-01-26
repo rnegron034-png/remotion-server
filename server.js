@@ -1,12 +1,14 @@
 import express from "express";
 import cors from "cors";
 import { v4 as uuidv4 } from "uuid";
-import { spawn } from "child_process";
+import { exec } from "child_process";
+import { promisify } from "util";
 import fs from "fs/promises";
 import fsSync from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
+const execAsync = promisify(exec);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -32,78 +34,27 @@ if (!fsSync.existsSync(VIDEO_DIR)) {
 
 /* ================= UTILITIES ================= */
 
-function execCommand(command, args = [], options = {}) {
-  return new Promise((resolve, reject) => {
-    const timeout = options.timeout || 300000;
-    
-    console.log(`Executing: ${command} ${args.join(" ")}`);
-    
-    // CRITICAL FIX: Use 'inherit' for stdin to prevent blocking
-    const child = spawn(command, args, {
-      shell: false,
-      stdio: ['inherit', 'pipe', 'pipe'], // Changed from 'ignore' to 'inherit'
-      ...options
+/**
+ * Execute command using child_process.exec (simpler, more reliable)
+ */
+async function execCommand(command, timeout = 300000) {
+  console.log(`Executing: ${command}`);
+  
+  try {
+    const { stdout, stderr } = await execAsync(command, {
+      timeout,
+      maxBuffer: 50 * 1024 * 1024, // 50MB buffer
+      shell: '/bin/bash'
     });
     
-    let stdout = "";
-    let stderr = "";
-    let lastUpdate = Date.now();
-    
-    child.stdout?.on("data", (data) => {
-      stdout += data.toString();
-    });
-    
-    child.stderr?.on("data", (data) => {
-      const chunk = data.toString();
-      stderr += chunk;
-      lastUpdate = Date.now();
-      
-      // Only log progress occasionally
-      if (chunk.includes("frame=")) {
-        const match = chunk.match(/frame=\s*(\d+)/);
-        if (match && parseInt(match[1]) % 30 === 0) {
-          console.log(`  Progress: frame ${match[1]}`);
-        }
-      }
-    });
-    
-    const timer = setTimeout(() => {
-      console.error(`Timeout after ${timeout}ms, killing process`);
-      child.kill("SIGKILL");
-      reject(new Error(`Timeout after ${timeout}ms`));
-    }, timeout);
-    
-    // Stall detection: if no data for 60 seconds, kill it
-    const stallChecker = setInterval(() => {
-      if (Date.now() - lastUpdate > 60000) {
-        console.error("Process stalled, killing");
-        clearInterval(stallChecker);
-        clearTimeout(timer);
-        child.kill("SIGKILL");
-        reject(new Error("Process stalled"));
-      }
-    }, 10000);
-    
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      clearInterval(stallChecker);
-      reject(new Error(`Process error: ${error.message}`));
-    });
-    
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      clearInterval(stallChecker);
-      
-      if (code === 0) {
-        resolve({ stdout, stderr });
-      } else {
-        const errorLog = stderr.slice(-1000);
-        console.error(`Command failed with code ${code}`);
-        console.error("Last 1000 chars of stderr:", errorLog);
-        reject(new Error(`Command failed with exit code ${code}`));
-      }
-    });
-  });
+    return { stdout, stderr };
+  } catch (error) {
+    console.error(`Command failed:`, error.message);
+    if (error.stderr) {
+      console.error(`STDERR:`, error.stderr.slice(-500));
+    }
+    throw error;
+  }
 }
 
 async function downloadFile(url, outputPath) {
@@ -117,119 +68,81 @@ async function downloadFile(url, outputPath) {
     throw new Error("Malformed URL");
   }
   
-  await execCommand("curl", [
-    "-L",
-    "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "--max-filesize", String(MAX_FILE_SIZE),
-    "--connect-timeout", "30",
-    "--max-time", "120",
-    "--fail",
-    "--silent",
-    "--show-error",
-    "-o", outputPath,
-    url
-  ], { timeout: DOWNLOAD_TIMEOUT });
+  const command = `curl -L -A "Mozilla/5.0" --max-filesize ${MAX_FILE_SIZE} --max-time 120 --fail --silent --show-error -o "${outputPath}" "${url}"`;
+  
+  await execCommand(command, DOWNLOAD_TIMEOUT);
   
   const stats = await fs.stat(outputPath);
   if (stats.size === 0) {
     throw new Error("Downloaded file is empty");
   }
   
-  if (stats.size > MAX_FILE_SIZE) {
-    await fs.unlink(outputPath);
-    throw new Error("File exceeds maximum size");
-  }
-  
   console.log(`  Downloaded: ${(stats.size / 1024 / 1024).toFixed(2)}MB`);
 }
 
 async function validateMedia(filePath) {
-  try {
-    const result = await execCommand("ffprobe", [
-      "-v", "error",
-      "-show_entries", "format=duration",
-      "-of", "default=noprint_wrappers=1:nokey=1",
-      filePath
-    ], { timeout: 30000 });
-    
-    const duration = parseFloat(result.stdout.trim());
-    if (duration > 0) {
-      console.log(`  Duration: ${duration.toFixed(2)}s`);
-    }
-  } catch (error) {
-    throw new Error(`Invalid media: ${error.message}`);
+  const command = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`;
+  
+  const { stdout } = await execCommand(command, 30000);
+  const duration = parseFloat(stdout.trim());
+  
+  if (duration > 0) {
+    console.log(`  Duration: ${duration.toFixed(2)}s`);
   }
 }
 
 async function normalizeVideo(inputPath, outputPath) {
-  await execCommand("ffmpeg", [
-    "-hide_banner",           // ✅ Hide banner
-    "-nostdin",              // ✅ No stdin
-    "-loglevel", "error",    // ✅ Only show errors
-    "-y",
-    "-i", inputPath,
-    "-map", "0:v:0",
-    "-an",
-    "-c:v", "libx264",
-    "-preset", "ultrafast",   // ✅ Changed from 'fast' to 'ultrafast'
-    "-crf", "23",
-    "-pix_fmt", "yuv420p",
-    "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:-1:-1,fps=30",
-    "-movflags", "+faststart",
-    "-max_muxing_queue_size", "9999", // ✅ Increase buffer
-    outputPath
-  ], { timeout: 300000 });
-  
-  // Verify output
+  const command = `
+    ffmpeg -hide_banner -nostdin -y
+    -fflags +genpts
+    -i "${inputPath}"
+    -map 0:v:0
+    -vsync cfr
+    -r 30
+    -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
+    -c:v libx264
+    -preset veryfast
+    -crf 23
+    -pix_fmt yuv420p
+    -profile:v high
+    -level 4.0
+    -movflags +faststart
+    -an
+    "${outputPath}"
+  `;
+
+  await execCommand(command, 300000);
+
   const stats = await fs.stat(outputPath);
-  console.log(`  Output: ${(stats.size / 1024 / 1024).toFixed(2)}MB`);
+  if (stats.size === 0) throw new Error("Normalized video is empty");
 }
 
+
 async function normalizeAudio(inputPath, outputPath) {
-  await execCommand("ffmpeg", [
-    "-hide_banner",
-    "-nostdin",
-    "-loglevel", "error",
-    "-y",
-    "-i", inputPath,
-    "-vn",
-    "-ac", "2",
-    "-ar", "48000",
-    "-c:a", "aac",
-    "-b:a", "192k",
-    "-max_muxing_queue_size", "9999",
-    outputPath
-  ], { timeout: 120000 });
+  const command = `ffmpeg -hide_banner -nostdin -loglevel error -y \
+    -i "${inputPath}" \
+    -vn -ac 2 -ar 48000 \
+    -c:a aac -b:a 192k \
+    "${outputPath}"`;
+  
+  await execCommand(command, 120000);
 }
 
 async function concatenateVideos(listPath, audioPath, outputPath) {
-  const args = [
-    "-hide_banner",
-    "-nostdin",
-    "-loglevel", "error",
-    "-y",
-    "-f", "concat",
-    "-safe", "0",
-    "-i", listPath
-  ];
+  let command = `ffmpeg -hide_banner -nostdin -loglevel error -y \
+    -f concat -safe 0 -i "${listPath}"`;
   
   if (audioPath) {
-    args.push("-i", audioPath, "-shortest");
+    command += ` -i "${audioPath}" -shortest`;
   }
   
-  args.push(
-    "-c:v", "libx264",
-    "-preset", "fast",
-    "-crf", "23",
-    "-c:a", "aac",
-    "-b:a", "192k",
-    "-pix_fmt", "yuv420p",
-    "-movflags", "+faststart",
-    "-max_muxing_queue_size", "9999",
-    outputPath
-  );
+  command += ` -c:v libx264 -preset fast -crf 23 \
+    -c:a aac -b:a 192k \
+    -pix_fmt yuv420p \
+    -movflags +faststart \
+    "${outputPath}"`;
   
-  await execCommand("ffmpeg", args, { timeout: RENDER_TIMEOUT });
+  await execCommand(command, RENDER_TIMEOUT);
 }
 
 async function cleanupJob(jobId) {
