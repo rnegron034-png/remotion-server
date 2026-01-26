@@ -17,13 +17,13 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 const VIDEO_DIR = path.join(__dirname, "videos");
 
-// === CONFIG FOR RELIABILITY & BALANCED QUALITY ===
+// === CONFIG FOR MAX RELIABILITY ON LOW-RESOURCE HOSTING ===
 const MAX_CONCURRENT_JOBS = 2;
-const MAX_JOB_DURATION_MS = 60 * 60 * 1000;      // 60 min max (extra safe)
+const MAX_JOB_DURATION_MS = 90 * 60 * 1000;      // 90 min global (extra safe)
 const JOB_EXPIRY_MS = 3 * 60 * 60 * 1000;        // 3 hours
 const MAX_CLIPS = 50;
 const DOWNLOAD_TIMEOUT_MS = 180000;
-const PROCESS_TIMEOUT_MS = 1800000;             // 30 min per FFmpeg step (increased for medium preset)
+const PROCESS_TIMEOUT_MS = 2400000;             // 40 min per step (plenty for encoding)
 
 // === GLOBAL STATE ===
 const JOBS = {};
@@ -39,19 +39,21 @@ async function execCommand(cmd, timeout = PROCESS_TIMEOUT_MS, description = "") 
   try {
     const { stdout, stderr } = await execAsync(cmd, {
       timeout,
-      maxBuffer: 200 * 1024 * 1024,
+      maxBuffer: 300 * 1024 * 1024, // Larger buffer for logs
       shell: "/bin/bash",
       killSignal: "SIGKILL",
     });
-    // Show more output on normal run for debugging
     if (stderr) console.warn(`FFmpeg stderr (${description}): ${stderr.trim()}`);
     return { stdout, stderr };
   } catch (error) {
-    let errMsg = error.stderr?.trim() || error.stdout?.trim() || error.message || "Unknown FFmpeg error";
-    if (error.timedOut) errMsg = `Timeout after ${timeout / 60000} min: ${errMsg}`;
-    if (error.killed) errMsg = `Process killed (OOM/timeout): ${errMsg}`;
-    console.error(`FFmpeg FAILED (${description}): ${errMsg}`);
-    throw new Error(`FFmpeg error (${description}): ${errMsg}`);
+    let errMsg = "No FFmpeg output (likely killed by system - OOM or resource limit)";
+    if (error.stderr) errMsg = error.stderr.trim();
+    else if (error.stdout) errMsg = error.stdout.trim();
+    else if (error.message) errMsg += ` | ${error.message}`;
+    if (error.timedOut) errMsg = `Timeout: ${errMsg}`;
+    if (error.killed) errMsg = `Killed (OOM/resource): ${errMsg}`;
+    console.error(`FFmpeg CRASHED (${description}): ${errMsg}`);
+    throw new Error(`FFmpeg crashed (${description}): ${errMsg}`);
   }
 }
 
@@ -255,20 +257,20 @@ async function processRenderJob(jobId, workDir, clips, audioUrl) {
 async function repairMp4(input, output) {
   const cmd = `ffmpeg -y -hide_banner -loglevel warning -err_detect ignore_err -fflags +genpts+discardcorrupt -i "${input}" -map 0:v? -map 0:a? -c copy -movflags +faststart "${output}"`;
   try {
-    await execCommand(cmd, 120000, "Repair MP4");
+    await execCommand(cmd, 180000, "Repair MP4");
   } catch {
-    console.log("Repair failed → using original");
+    console.log("Repair failed → using original raw");
     await fs.rename(input, output);
   }
 }
 
 async function normalizeVideo(input, output) {
-  // BALANCED HIGH QUALITY: medium preset is reliable, fast enough, excellent quality
-  // CRF 19 = very good visuals, smaller files than ultrafast
+  // FAST & RELIABLE: veryfast preset uses much less CPU/memory → prevents crashes on low-resource containers
+  // CRF 20 = still very good quality for YouTube compilations/shorts
   const cmd = `ffmpeg -y -hide_banner -loglevel warning -fflags +genpts+discardcorrupt -i "${input}" ` +
     `-map 0:v? -vsync cfr -r 30 ` +
     `-vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" ` +
-    `-c:v libx264 -preset medium -crf 19 -pix_fmt yuv420p -movflags +faststart -an "${output}"`;
+    `-c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -movflags +faststart -an "${output}"`;
   await execCommand(cmd, PROCESS_TIMEOUT_MS, "Normalize video");
 }
 
@@ -322,9 +324,9 @@ process.on("SIGTERM", async () => {
 });
 
 const server = app.listen(PORT, () => {
-  console.log(`\nRELIABLE HIGH-QUALITY Video Server LIVE on port ${PORT}`);
-  console.log(`Quality: libx264 medium preset CRF 19 → excellent YouTube-ready quality`);
-  console.log(`Increased timeouts • Better error details • Handles any input format`);
+  console.log(`\nULTRA-RELIABLE Video Server LIVE on port ${PORT}`);
+  console.log(`Encoding: libx264 veryfast preset CRF 20 → reliable on low CPU/RAM, good quality`);
+  console.log(`No more silent crashes • Handles resource-limited hosting • Any input format`);
 });
 
 export default app;
