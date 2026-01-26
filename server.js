@@ -1,3 +1,20 @@
+function run(cmd) {
+  return new Promise((resolve, reject) => {
+    exec(cmd, (e, stdout, stderr) => {
+      if (e) reject(stderr || e);
+      else resolve(stdout);
+    });
+  });
+}
+// Download audio
+const audioRaw = path.join(workDir, "audio.raw");
+await run(`curl -L "${audio}" -o "${audioRaw}"`);
+
+// Convert to WAV (this fixes corrupted mp3)
+const audioWav = path.join(workDir, "audio.wav");
+await run(`ffmpeg -y -i "${audioRaw}" -ar 44100 -ac 2 "${audioWav}"`);
+await run(`ffmpeg -y -i "${videoOnly}" -i "${audioWav}" -shortest -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac "${finalOut}"`);
+
 import express from "express";
 import cors from "cors";
 import { v4 as uuidv4 } from "uuid";
