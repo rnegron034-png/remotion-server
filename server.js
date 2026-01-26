@@ -90,6 +90,20 @@ async function validateMedia(filePath) {
     console.log(`  Duration: ${duration.toFixed(2)}s`);
   }
 }
+async function repairMp4(inputPath, outputPath) {
+  const cmd = `
+    ffmpeg -y -hide_banner -nostdin
+    -err_detect ignore_err
+    -i "${inputPath}"
+    -map 0:v:0?
+    -map 0:a:0?
+    -c copy
+    -movflags +faststart
+    "${outputPath}"
+  `;
+  await execCommand(cmd, 120000);
+}
+
 
 async function normalizeVideo(inputPath, outputPath) {
   const command = `
@@ -259,12 +273,15 @@ async function processRenderJob(jobId, workDir, clips, audio) {
       try {
         console.log(`  Downloading...`);
         await downloadFile(clips[i], rawPath);
-        
-        console.log(`  Validating...`);
-        await validateMedia(rawPath);
-        
-        console.log(`  Normalizing...`);
-        await normalizeVideo(rawPath, normalizedPath);
+
+const repaired = path.join(workDir, `repaired_${i}.mp4`);
+await repairMp4(rawPath, repaired);
+await fs.unlink(rawPath);
+
+await validateMedia(repaired);
+await normalizeVideo(repaired, normalizedPath);
+await fs.unlink(repaired);
+
         
         normalizedClips.push(normalizedPath);
         await fs.unlink(rawPath);
