@@ -7,7 +7,6 @@ const app = express();
 app.use(express.json());
 
 const jobs = new Map();
-const PORT = process.env.PORT || 3000;
 
 app.post("/render", async (req, res) => {
   const { clips, audio, title } = req.body;
