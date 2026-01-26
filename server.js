@@ -22,6 +22,27 @@ if (!fs.existsSync(VIDEO_DIR)) fs.mkdirSync(VIDEO_DIR);
 /* ================================
    Health
 ================================ */
+// Health check (Railway needs this)
+app.get("/health", (req, res) => {
+  res.json({
+    status: "ok",
+    uptime: process.uptime(),
+    memory: process.memoryUsage().rss,
+    jobs: Object.keys(jobs).length,
+  });
+});
+
+// List all jobs
+app.get("/jobs", (req, res) => {
+  res.json(jobs);
+});
+
+// Force crash test (to confirm Railway restarts correctly)
+app.get("/crash", () => {
+  process.exit(1);
+});
+
+
 app.get("/", (req, res) => {
   res.json({ status: "Remotion server running" });
 });
