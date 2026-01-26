@@ -17,26 +17,25 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 const VIDEO_DIR = path.join(__dirname, "videos");
 
-// === ROBUSTNESS CONFIG (optimized for reliability & quality) ===
-const MAX_CONCURRENT_JOBS = 2;                  // Safe for most servers
-const MAX_JOB_DURATION_MS = 45 * 60 * 1000;      // 45 min max per job (prevents hangs)
-const JOB_EXPIRY_MS = 3 * 60 * 60 * 1000;        // 3 hours keep final video
+// === CONFIG FOR RELIABILITY & BALANCED QUALITY ===
+const MAX_CONCURRENT_JOBS = 2;
+const MAX_JOB_DURATION_MS = 60 * 60 * 1000;      // 60 min max (extra safe)
+const JOB_EXPIRY_MS = 3 * 60 * 60 * 1000;        // 3 hours
 const MAX_CLIPS = 50;
-const DOWNLOAD_TIMEOUT_MS = 180000;             // 3 min per download
-const PROCESS_TIMEOUT_MS = 1200000;             // 20 min per FFmpeg step (longer for better quality)
+const DOWNLOAD_TIMEOUT_MS = 180000;
+const PROCESS_TIMEOUT_MS = 1800000;             // 30 min per FFmpeg step (increased for medium preset)
 
 // === GLOBAL STATE ===
 const JOBS = {};
 let activeProcessingJobs = 0;
 
-// Ensure directories
 if (!fsSync.existsSync(VIDEO_DIR)) {
   fsSync.mkdirSync(VIDEO_DIR, { recursive: true });
 }
 
 // === UTILS ===
 async function execCommand(cmd, timeout = PROCESS_TIMEOUT_MS, description = "") {
-  console.log(`[${description || "FFmpeg"}] ${cmd.substring(0, 500)}${cmd.length > 500 ? "..." : ""}`);
+  console.log(`[${description || "FFmpeg"}] ${cmd.substring(0, 600)}${cmd.length > 600 ? "..." : ""}`);
   try {
     const { stdout, stderr } = await execAsync(cmd, {
       timeout,
@@ -44,14 +43,15 @@ async function execCommand(cmd, timeout = PROCESS_TIMEOUT_MS, description = "") 
       shell: "/bin/bash",
       killSignal: "SIGKILL",
     });
-    if (stderr && !stderr.includes("frame=") && !stderr.includes("speed=")) {
-      console.warn(`FFmpeg warning: ${stderr.trim()}`);
-    }
+    // Show more output on normal run for debugging
+    if (stderr) console.warn(`FFmpeg stderr (${description}): ${stderr.trim()}`);
     return { stdout, stderr };
   } catch (error) {
-    const errMsg = error.stderr?.trim() || error.stdout?.trim() || error.message || "Unknown error";
+    let errMsg = error.stderr?.trim() || error.stdout?.trim() || error.message || "Unknown FFmpeg error";
+    if (error.timedOut) errMsg = `Timeout after ${timeout / 60000} min: ${errMsg}`;
+    if (error.killed) errMsg = `Process killed (OOM/timeout): ${errMsg}`;
     console.error(`FFmpeg FAILED (${description}): ${errMsg}`);
-    throw new Error(`FFmpeg error: ${errMsg}`);
+    throw new Error(`FFmpeg error (${description}): ${errMsg}`);
   }
 }
 
@@ -67,7 +67,6 @@ async function downloadFile(url, output) {
   console.log(`Downloaded: ${(stat.size / 1024 / 1024).toFixed(2)} MB`);
 }
 
-// Only cleans temporary working directory (never touches final video)
 async function cleanupWorkDir(jobId) {
   try {
     const workDir = path.join(VIDEO_DIR, jobId);
@@ -101,7 +100,6 @@ app.post("/render", async (req, res) => {
   const jobId = uuidv4();
   const { clips = [], audio } = req.body;
 
-  // Validation
   if (!Array.isArray(clips) || clips.length === 0) {
     return res.status(400).json({ error: "clips array is required and non-empty" });
   }
@@ -130,18 +128,16 @@ app.post("/render", async (req, res) => {
 
   res.json({ jobId, status: "processing", message: "Job started successfully" });
 
-  // Global job timeout (kills hung jobs)
   const jobTimeout = setTimeout(async () => {
-    console.error(`Job ${jobId} timed out after ${MAX_JOB_DURATION_MS / 60000} minutes`);
+    console.error(`Job ${jobId} global timeout after ${MAX_JOB_DURATION_MS / 60000} min`);
     if (JOBS[jobId]) {
       JOBS[jobId].status = "failed";
-      JOBS[jobId].error = "Job timeout – processing took too long";
+      JOBS[jobId].error = "Global job timeout";
       JOBS[jobId].failedAt = new Date().toISOString();
     }
     await cleanupWorkDir(jobId);
   }, MAX_JOB_DURATION_MS);
 
-  // Background processing
   (async () => {
     activeProcessingJobs++;
     let finalPath = null;
@@ -162,8 +158,6 @@ app.post("/render", async (req, res) => {
       await cleanupWorkDir(jobId);
     } finally {
       activeProcessingJobs--;
-
-      // Auto-expire metadata + final video after 3 hours
       setTimeout(async () => {
         delete JOBS[jobId];
         console.log(`Expired job metadata: ${jobId}`);
@@ -181,7 +175,6 @@ async function processRenderJob(jobId, workDir, clips, audioUrl) {
 
   const normalizedClips = [];
 
-  // Process each clip (handles ANY input format reliably)
   for (let i = 0; i < clips.length; i++) {
     console.log(`\nProcessing clip ${i + 1}/${clips.length}`);
     const rawPath = path.join(workDir, `raw_${i}`);
@@ -191,7 +184,7 @@ async function processRenderJob(jobId, workDir, clips, audioUrl) {
     await downloadFile(clips[i], rawPath);
     await repairMp4(rawPath, fixedPath);
     await fs.unlink(rawPath).catch(() => {});
-    await normalizeVideo(fixedPath, normPath); // High-quality re-encode
+    await normalizeVideo(fixedPath, normPath);
     await fs.unlink(fixedPath).catch(() => {});
 
     normalizedClips.push(normPath);
@@ -200,7 +193,6 @@ async function processRenderJob(jobId, workDir, clips, audioUrl) {
     console.log(`Clip ${i + 1} normalized`);
   }
 
-  // Process audio (if provided)
   let audioFile = null;
   if (audioUrl) {
     console.log("\nProcessing audio");
@@ -212,11 +204,9 @@ async function processRenderJob(jobId, workDir, clips, audioUrl) {
     await fs.unlink(rawAudio).catch(() => {});
 
     JOBS[jobId].progress = 70;
-    console.log("Audio normalized");
   }
 
-  // Final assembly (never gets stuck – proven reliable)
-  console.log("\nConcatenating videos (stream copy)");
+  console.log("\nConcatenating videos");
   JOBS[jobId].progress = 80;
 
   const listPath = path.join(workDir, "list.txt");
@@ -225,14 +215,12 @@ async function processRenderJob(jobId, workDir, clips, audioUrl) {
   const videoOnlyPath = path.join(workDir, "video_only.mp4");
   const finalPath = path.join(VIDEO_DIR, `${jobId}.mp4`);
 
-  // Step 1: Fast stream-copy concat (all clips now identical format)
   await execCommand(
     `ffmpeg -y -hide_banner -loglevel error -f concat -safe 0 -i "${listPath}" -c copy -movflags +faststart "${videoOnlyPath}"`,
     PROCESS_TIMEOUT_MS,
     "Video concat"
   );
 
-  // Step 2: Mux audio (lossless)
   if (audioFile) {
     console.log("Muxing audio");
     await execCommand(
@@ -259,39 +247,36 @@ async function processRenderJob(jobId, workDir, clips, audioUrl) {
     completedAt: new Date().toISOString(),
   };
 
-  // Clean only temporary files – keep final video for download
   await cleanupWorkDir(jobId);
 
   return finalPath;
 }
 
-// Enhanced FFmpeg steps for maximum compatibility & quality
 async function repairMp4(input, output) {
-  const cmd = `ffmpeg -y -hide_banner -loglevel error -err_detect ignore_err -fflags +genpts -i "${input}" -map 0:v:0? -map 0:a:0? -c copy -movflags +faststart "${output}"`;
+  const cmd = `ffmpeg -y -hide_banner -loglevel warning -err_detect ignore_err -fflags +genpts+discardcorrupt -i "${input}" -map 0:v? -map 0:a? -c copy -movflags +faststart "${output}"`;
   try {
-    await execCommand(cmd, 90000, "Repair MP4");
+    await execCommand(cmd, 120000, "Repair MP4");
   } catch {
-    console.log("Repair failed → using original raw file");
+    console.log("Repair failed → using original");
     await fs.rename(input, output);
   }
 }
 
 async function normalizeVideo(input, output) {
-  // BETTER QUALITY: -preset slow + lower CRF = significantly better visuals
-  // Balanced for YouTube shorts/compilations (good quality, reasonable speed/size)
-  const cmd = `ffmpeg -y -hide_banner -loglevel error -fflags +genpts+discardcorrupt -i "${input}" ` +
-    `-map 0:v:0 -vsync cfr -r 30 ` +
-    `-vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p" ` +
-    `-c:v libx264 -preset slow -crf 18 -pix_fmt yuv420p -movflags +faststart -an "${output}"`;
-  await execCommand(cmd, PROCESS_TIMEOUT_MS, "Normalize video (high quality)");
+  // BALANCED HIGH QUALITY: medium preset is reliable, fast enough, excellent quality
+  // CRF 19 = very good visuals, smaller files than ultrafast
+  const cmd = `ffmpeg -y -hide_banner -loglevel warning -fflags +genpts+discardcorrupt -i "${input}" ` +
+    `-map 0:v? -vsync cfr -r 30 ` +
+    `-vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" ` +
+    `-c:v libx264 -preset medium -crf 19 -pix_fmt yuv420p -movflags +faststart -an "${output}"`;
+  await execCommand(cmd, PROCESS_TIMEOUT_MS, "Normalize video");
 }
 
 async function normalizeAudio(input, output) {
-  const cmd = `ffmpeg -y -hide_banner -loglevel error -i "${input}" -vn -ac 2 -ar 48000 -c:a aac -b:a 256k "${output}"`; // Higher bitrate for better audio
+  const cmd = `ffmpeg -y -hide_banner -loglevel warning -i "${input}" -vn -ac 2 -ar 48000 -c:a aac -b:a 192k "${output}"`;
   await execCommand(cmd, 180000, "Normalize audio");
 }
 
-// Status & Download
 app.get("/status/:id", (req, res) => {
   const jobId = req.params.id;
   if (!/^[a-f0-9-]{36}$/i.test(jobId)) return res.status(400).json({ error: "Invalid job ID" });
@@ -319,7 +304,6 @@ app.get("/download/:id", (req, res) => {
   res.download(job.file, `compilation_${jobId}.mp4`);
 });
 
-// Error handling & shutdown
 app.use((req, res) => res.status(404).json({ error: "Endpoint not found" }));
 
 app.use((err, req, res, next) => {
@@ -338,9 +322,9 @@ process.on("SIGTERM", async () => {
 });
 
 const server = app.listen(PORT, () => {
-  console.log(`\nHIGH-QUALITY Video Compilation Server LIVE on port ${PORT}`);
-  console.log(`Output: 1080x1920 vertical, libx264 slow preset CRF 18 (excellent quality)`);
-  console.log(`Handles ANY input format reliably • No stuck jobs • 3-hour video retention`);
+  console.log(`\nRELIABLE HIGH-QUALITY Video Server LIVE on port ${PORT}`);
+  console.log(`Quality: libx264 medium preset CRF 19 → excellent YouTube-ready quality`);
+  console.log(`Increased timeouts • Better error details • Handles any input format`);
 });
 
 export default app;
