@@ -11,135 +11,118 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "100mb" }));
+app.use(express.json({ limit: "50mb" }));
 
 const PORT = process.env.PORT || 8080;
-const JOBS = {};
-
 const VIDEO_DIR = path.join(__dirname, "videos");
 if (!fs.existsSync(VIDEO_DIR)) fs.mkdirSync(VIDEO_DIR);
 
-/* ============================
-   Health
-============================ */
+const JOBS = {};
+
+/* ================= HEALTH ================= */
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
-    uptime: process.uptime(),
     jobs: Object.keys(JOBS).length,
+    uptime: process.uptime()
   });
 });
 
-/* ============================
-   Render
-============================ */
+app.get("/", (req, res) => {
+  res.json({ status: "Remotion server running" });
+});
+
+/* ================= RENDER ================= */
 app.post("/render", async (req, res) => {
   try {
     const { clips, audio } = req.body;
-
     if (!Array.isArray(clips) || clips.length === 0) {
-      return res.status(400).json({ error: "clips must be array" });
+      return res.status(400).json({ error: "clips[] required" });
     }
 
     const jobId = uuidv4();
     const workDir = path.join(VIDEO_DIR, jobId);
-    fs.mkdirSync(workDir, { recursive: true });
+    fs.mkdirSync(workDir);
 
-    JOBS[jobId] = { status: "downloading" };
+    const output = path.join(VIDEO_DIR, `${jobId}.mp4`);
+    JOBS[jobId] = { status: "downloading", file: output };
 
-    // 1. Download clips
+    /* 1. Download clips */
     const localClips = [];
     for (let i = 0; i < clips.length; i++) {
       const target = path.join(workDir, `clip${i}.mp4`);
-      await execPromise(`curl -L "${clips[i]}" -o "${target}"`);
+      await run(`curl -L "${clips[i]}" -o "${target}"`);
       localClips.push(target);
     }
 
-    // 2. Concat clips (keep their audio too)
+    /* 2. Build concat list */
     const concatFile = path.join(workDir, "list.txt");
     fs.writeFileSync(concatFile, localClips.map(f => `file '${f}'`).join("\n"));
 
-    const mergedVideo = path.join(workDir, "merged.mp4");
-    await execPromise(`ffmpeg -y -f concat -safe 0 -i "${concatFile}" -c copy "${mergedVideo}"`);
-
-    // 3. If audio exists, normalize it
-    let finalOutput = path.join(VIDEO_DIR, `${jobId}.mp4`);
-
+    /* 3. Download & normalize audio */
+    let audioWav = null;
     if (audio) {
-      JOBS[jobId].status = "processing-audio";
-
       const audioRaw = path.join(workDir, "audio_raw");
-      await execPromise(`curl -L "${audio}" -o "${audioRaw}"`);
+      audioWav = path.join(workDir, "audio.wav");
 
-      const audioWav = path.join(workDir, "audio.wav");
-
-      // Re-encode audio to clean PCM WAV (this fixes Pixabay MP3 corruption)
-      await execPromise(
-        `ffmpeg -y -err_detect ignore_err -i "${audioRaw}" -ac 2 -ar 44100 -vn "${audioWav}"`
-      );
-
-      JOBS[jobId].status = "rendering";
-
-      // Strip video audio + apply clean wav
-      await execPromise(
-        `ffmpeg -y -i "${mergedVideo}" -i "${audioWav}" -map 0:v:0 -map 1:a:0 -shortest -c:v libx264 -pix_fmt yuv420p -c:a aac "${finalOutput}"`
-      );
-    } else {
-      JOBS[jobId].status = "rendering";
-      await execPromise(`ffmpeg -y -i "${mergedVideo}" -c:v libx264 -pix_fmt yuv420p "${finalOutput}"`);
+      await run(`curl -L "${audio}" -o "${audioRaw}"`);
+      await run(`ffmpeg -y -i "${audioRaw}" -ac 2 -ar 44100 -vn "${audioWav}"`);
     }
 
-    JOBS[jobId] = { status: "done", file: finalOutput };
+    JOBS[jobId].status = "rendering";
+
+    /* 4. Render */
+    let cmd = `ffmpeg -y -f concat -safe 0 -i "${concatFile}"`;
+
+    if (audioWav) {
+      cmd += ` -i "${audioWav}" -shortest -map 0:v:0 -map 1:a:0`;
+    } else {
+      cmd += ` -map 0:v:0 -map 0:a?`;
+    }
+
+    cmd += ` -c:v libx264 -pix_fmt yuv420p -c:a aac "${output}"`;
+
+    exec(cmd, (err) => {
+      if (err) {
+        console.error("FFMPEG ERROR", err);
+        JOBS[jobId].status = "error";
+      } else {
+        JOBS[jobId].status = "done";
+      }
+    });
 
     res.json({ jobId });
   } catch (e) {
-    console.error("RENDER ERROR:", e);
+    console.error(e);
     res.status(500).json({ error: "render failed" });
   }
 });
 
-/* ============================
-   Status
-============================ */
+/* ================= STATUS ================= */
 app.get("/status/:id", (req, res) => {
   const job = JOBS[req.params.id];
   if (!job) return res.json({ status: "unknown" });
   res.json(job);
 });
 
-/* ============================
-   Download
-============================ */
+/* ================= DOWNLOAD ================= */
 app.get("/download/:id", (req, res) => {
   const job = JOBS[req.params.id];
   if (!job || job.status !== "done") return res.sendStatus(404);
   res.download(job.file);
 });
 
-/* ============================
-   Root
-============================ */
-app.get("/", (req, res) => {
-  res.json({ status: "Remotion server running" });
-});
-
-/* ============================
-   Start
-============================ */
-app.listen(PORT, () => {
-  console.log("Remotion server listening on", PORT);
-});
-
-/* ============================
-   Helpers
-============================ */
-function execPromise(cmd) {
+/* ================= UTILS ================= */
+function run(cmd) {
   return new Promise((resolve, reject) => {
-    exec(cmd, (err, stdout, stderr) => {
-      if (err) {
-        console.error(stderr);
-        reject(err);
-      } else resolve(stdout);
+    exec(cmd, (e, out, err) => {
+      if (e) reject(err || out);
+      else resolve(out);
     });
   });
 }
+
+/* ================= START ================= */
+app.listen(PORT, () => {
+  console.log("Remotion server listening on", PORT);
+});
