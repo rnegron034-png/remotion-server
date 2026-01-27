@@ -1,6 +1,6 @@
 FROM node:20-bullseye
 
-# Install system deps
+# System deps for Chromium + FFmpeg
 RUN apt-get update && apt-get install -y \
   ffmpeg \
   chromium \
@@ -23,7 +23,6 @@ RUN apt-get update && apt-get install -y \
   libcairo2 \
   libgtk-3-0 \
   libx11-xcb1 \
-  curl \
   && rm -rf /var/lib/apt/lists/*
 
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
@@ -32,14 +31,12 @@ ENV REMOTION_BROWSER=chromium
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-
-# Install everything INCLUDING remotion
 RUN npm install
-RUN npm install remotion @remotion/renderer
+RUN npm install -g remotion
 
 COPY . .
 
-RUN mkdir -p /app/videos
+RUN mkdir -p /dev/shm && chmod 777 /dev/shm
 
 EXPOSE 8080
 CMD ["node", "server.js"]
