@@ -1,4 +1,4 @@
-import { registerRoot } from "remotion";
-import { Video } from "./Video";
+import { getInputProps } from "remotion";
 
-registerRoot(Video);
+export const Video = () => {
+  const { scenes, audio } = getInputProps();
