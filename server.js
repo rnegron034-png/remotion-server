@@ -7,7 +7,6 @@ import fsSync from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
-// Set Chromium path for the environment
 process.env.PUPPETEER_EXECUTABLE_PATH = "/usr/bin/chromium";
 process.env.REMOTION_BROWSER = "chromium";
 
@@ -27,12 +26,9 @@ const JOBS = {};
 let active = 0;
 const MAX = 1;
 
-/* ======================= UTIL ======================= */
-
 function run(cmd) {
   return new Promise((resolve, reject) => {
-    console.log("\nRUNNING COMMAND:", cmd);
-
+    console.log("\nRUNNING:", cmd);
     const p = exec(cmd, {
       maxBuffer: 1024 * 1024 * 500,
       env: process.env,
@@ -43,7 +39,7 @@ function run(cmd) {
 
     p.on("exit", code => {
       if (code === 0) resolve();
-      else reject(new Error("Command failed: " + code));
+      else reject(new Error("Process exited with code: " + code));
     });
   });
 }
@@ -52,14 +48,11 @@ async function download(url, out) {
   await run(`curl -L --fail --silent --show-error "${url}" -o "${out}"`);
 }
 
-/* ======================= RENDER ======================= */
-
 app.post("/remotion-render", async (req, res) => {
   try {
     if (active >= MAX) return res.status(503).json({ error: "Server busy" });
 
     const { scenes, audio } = req.body;
-
     if (!Array.isArray(scenes) || scenes.length === 0) {
       return res.status(400).json({ error: "Scenes required" });
     }
@@ -74,87 +67,69 @@ app.post("/remotion-render", async (req, res) => {
     (async () => {
       active++;
       try {
-        console.log("\n=== STARTING JOB:", jobId, "===");
-
-        /* 1) Download clips */
         for (let i = 0; i < scenes.length; i++) {
           const file = path.join(dir, `scene_${i}.mp4`);
           await download(scenes[i].src, file);
           scenes[i].local = file;
         }
 
-        /* 2) Download audio */
         if (audio?.src) {
           const a = path.join(dir, "audio.mp3");
           await download(audio.src, a);
           audio.local = a;
         }
 
-        /* 3) Write props */
         const propsPath = path.join(dir, "props.json");
         await fs.writeFile(propsPath, JSON.stringify({
           scenes: scenes.map(s => ({ src: s.local })),
           audio: audio ? { src: audio.local } : null
         }));
 
-/* 4) Render Video */
-const video = path.join(dir, "video.mp4");
+        const video = path.join(dir, "video.mp4");
 
-// We now point to the binary that we just added to package.json
-const remotionBinary = "./node_modules/.bin/remotion";
+        // STABILITY FIX: Use optimized flags and concurrency limit
+        const cmd = [
+          "npx remotion render",
+          "remotion/index.ts",
+          "Video",
+          `"${video}"`,
+          `--props="${propsPath}"`,
+          "--codec=h264",
+          "--concurrency=1", // Prevents overloading the CPU/RAM
+          "--browser-executable=/usr/bin/chromium",
+          '--chromium-flags="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --no-zygote --headless=new"',
+          "--log=verbose"
+        ].join(" ");
 
-/* Inside server.js */
+        await run(cmd);
 
-const cmd = [
-  remotionBinary,
-  "render",
-  "remotion/index.tsx",  // <--- CHANGE THIS LINE (it was .ts)
-  "Video",
-  `"${video}"`,
-  `--props="${propsPath}"`,
-  "--codec=h264",
-  "--browser-executable=/usr/bin/chromium",
-  '--chromium-flags="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --single-process --no-zygote"',
-  "--log=verbose",
-  "--concurrency=1"
-].join(" ");
-
-await run(cmd);
-
-        /* 5) Final Mux with Audio */
         const final = path.join(WORK, `${jobId}.mp4`);
-
         if (audio?.local) {
-          await run(
-            `ffmpeg -y -i "${video}" -i "${audio.local}" -map 0:v -map 1:a -c:v copy -c:a aac -shortest "${final}"`
-          );
+          await run(`ffmpeg -y -i "${video}" -i "${audio.local}" -map 0:v -map 1:a -c:v copy -c:a aac -shortest "${final}"`);
         } else {
           await fs.rename(video, final);
         }
 
         JOBS[jobId] = { status: "done", file: final };
-        console.log("SUCCESS:", jobId);
       } catch (e) {
         console.error("RENDER FAILED:", e);
         JOBS[jobId] = { status: "failed", error: e.message };
       } finally {
         active--;
+        // Clean up temporary local files to save disk space
+        await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
       }
     })();
   } catch (err) {
-    console.error("API ERROR", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get("/status/:id", (req, res) => {
-  res.json(JOBS[req.params.id] || { status: "unknown" });
-});
-
+app.get("/status/:id", (req, res) => res.json(JOBS[req.params.id] || { status: "unknown" }));
 app.get("/download/:id", (req, res) => {
   const j = JOBS[req.params.id];
   if (!j || j.status !== "done") return res.status(404).json({ error: "Not ready" });
   res.download(j.file);
 });
 
-app.listen(PORT, () => console.log(`SERVER RUNNING ON PORT ${PORT}`));
+app.listen(PORT, () => console.log("SERVER LIVE"));
