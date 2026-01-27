@@ -1,7 +1,6 @@
-# Use Node.js LTS
 FROM node:18-bullseye-slim
 
-# Install system dependencies for Remotion and Chromium
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     chromium \
     ffmpeg \
@@ -14,24 +13,20 @@ RUN apt-get update && apt-get install -y \
     libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
 WORKDIR /app
 
-# Copy package files first for better caching
-COPY package*.json ./
-
-# Install npm dependencies
-RUN npm install
-
-# Copy the rest of the application
-COPY . .
-
-# Set environment variables for Chromium
+# 1. Skip Puppeteer's heavy Chromium download (we use the installed system one)
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV REMOTION_BROWSER=chromium
 
-# Expose the port your server runs on
+COPY package*.json ./
+
+# 2. Ensure we install dependencies properly
+RUN npm install
+
+COPY . .
+
 EXPOSE 8080
 
-# Start the server
 CMD ["node", "server.js"]
