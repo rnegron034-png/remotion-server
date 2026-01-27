@@ -1,6 +1,6 @@
 FROM node:18-bullseye-slim
 
-# Install system dependencies
+# 1. Install System Dependencies
 RUN apt-get update && apt-get install -y \
     chromium \
     ffmpeg \
@@ -10,19 +10,20 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# 1. Copy ONLY package.json (Ignore package-lock.json to avoid Windows/Linux conflicts)
+# 2. Copy ONLY package.json
+# (We intentionally DO NOT copy package-lock.json to avoid Windows conflicts)
 COPY package.json ./
 
-# 2. Install dependencies
-# Using 'npm install' without a lockfile allows it to resolve fresh for Linux
+# 3. Fresh Install for Linux
 RUN npm install
 
-# 3. Copy app code
+# 4. Copy the rest of the app
 COPY . .
 
-# 4. SAFETY: Rebuild esbuild specifically for Linux (Fixes the "undefined" error)
-RUN npm rebuild esbuild
+# 5. THE FIX: Force esbuild to download the correct Linux binary
+RUN node node_modules/esbuild/install.js || npm rebuild esbuild
 
+# Environment Variables
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV REMOTION_BROWSER=chromium
