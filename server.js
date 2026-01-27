@@ -1,251 +1,180 @@
-import express from "express";
-import cors from "cors";
-import { exec } from "child_process";
-import { v4 as uuidv4 } from "uuid";
-import fs from "fs";
-import fsp from "fs/promises";
-import path from "path";
+const express = require('express');
+const { exec } = require('child_process');
+const { promisify } = require('util');
+const fs = require('fs').promises;
+const path = require('path');
 
+const execAsync = promisify(exec);
 const app = express();
-const PORT = process.env.PORT || 8080;
-const WORK = "/app/videos";
+const PORT = process.env.PORT || 3000;
 
-if (!fs.existsSync(WORK)) fs.mkdirSync(WORK, { recursive: true });
+app.use(express.json({ limit: '10mb' }));
 
-app.use(cors());
-app.use(express.json({ limit: "200mb" }));
+// Job tracking
+const jobs = new Map();
+let activeRenders = 0;
+const MAX_CONCURRENT = 1; // Railway memory limit
 
-const JOBS = {};
-let active = 0;
-const MAX = 1;
+// Helpers
+const RENDERS_DIR = path.join(__dirname, 'renders');
+const PROPS_DIR = path.join(__dirname, 'props');
 
-function run(cmd) {
-  return new Promise((resolve, reject) => {
-    console.log("\nRUN:", cmd);
-    exec(cmd, { maxBuffer: 1024 * 1024 * 500 }, (err, stdout, stderr) => {
-      if (stdout) console.log(stdout);
-      if (stderr) console.error(stderr);
-      if (err) reject(err);
-      else resolve();
-    });
-  });
+function generateJobId() {
+  return `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
 
-async function download(url, out) {
-  await run(`curl -L --fail -o "${out}" "${url}"`);
-}
-
-/* ================= RENDER ================= */
-
-app.post("/remotion-render", async (req, res) => {
-  if (active >= MAX) return res.status(503).json({ error: "Server busy" });
-
+// ============================
+// POST /remotion-render
+// ============================
+app.post('/remotion-render', async (req, res) => {
   const { scenes, audio } = req.body;
-  if (!Array.isArray(scenes) || scenes.length === 0)
-    return res.status(400).json({ error: "Scenes required" });
 
-  const jobId = uuidv4();
-  const dir = path.join(WORK, jobId);
-  await fsp.mkdir(dir, { recursive: true });
-
-  JOBS[jobId] = { status: "rendering" };
-  res.json({ jobId });
-
-  (async () => {
-    active++;
-    try {
-      console.log("JOB", jobId);
-
-      // download scenes
-      for (let i = 0; i < scenes.length; i++) {
-        const p = path.join(dir, `scene_${i}.mp4`);
-        await download(scenes[i].src, p);
-        scenes[i].local = p;
-      }
-
-      // download audio
-      let audioPath = null;
-      if (audio?.src) {
-        audioPath = path.join(dir, "audio.mp3");
-        await download(audio.src, audioPath);
-      }
-
-      const propsPath = path.join(dir, "props.json");
-      await fsp.writeFile(propsPath, JSON.stringify({ scenes }));
-
-      const rawVideo = path.join(dir, "video.mp4");
-      const finalVideo = path.join(WORK, `${jobId}.mp4`);
-
-      // CRITICAL: one-line remotion call
-      await run(
-        `remotion render remotion/index.ts Video "${rawVideo}" --props="${propsPath}" --codec=h264 --browser-executable=/usr/bin/chromium --chromium-flags="--no-sandbox --disable-dev-shm-usage --disable-gpu"`
-      );
-
-      if (audioPath) {
-        await run(
-          `ffmpeg -y -i "${rawVideo}" -i "${audioPath}" -map 0:v -map 1:a -c:v copy -c:a aac -shortest "${finalVideo}"`
-        );
-      } else {
-        await fsp.rename(rawVideo, finalVideo);
-      }
-
-      JOBS[jobId] = { status: "done", file: finalVideo };
-    } catch (e) {
-      console.error("FAILED:", e);
-      JOBS[jobId] = { status: "failed", error: e.message };
-    } finally {
-      active--;
-    }
-  })();
-});
-
-/* ================= STATUS ================= */
-
-app.get("/status/:id", (req, res) => {
-  res.json(JOBS[req.params.id] || { status: "unknown" });
-});
-
-app.get("/download/:id", (req, res) => {
-  const j = JOBS[req.params.id];
-  if (!j || j.status !== "done") return res.status(404).json({ error: "Not ready" });
-  res.download(j.file);
-});
-
-app.listen(PORT, () => console.log("REMOTION SERVER LIVE"));
-import express from "express";
-import cors from "cors";
-import { v4 as uuidv4 } from "uuid";
-import { execFile } from "child_process";
-import fs from "fs/promises";
-import fsSync from "fs";
-import path from "path";
-
-const app = express();
-const PORT = process.env.PORT || 8080;
-const WORK = "/app/videos";
-
-if (!fsSync.existsSync(WORK)) fsSync.mkdirSync(WORK, { recursive: true });
-
-app.use(cors());
-app.use(express.json({ limit: "200mb" }));
-
-const JOBS = {};
-let active = 0;
-const MAX = 1;
-
-/* --------------------- UTIL --------------------- */
-
-function run(cmd, args = []) {
-  return new Promise((resolve, reject) => {
-    console.log("RUN:", cmd, args.join(" "));
-    const p = execFile(cmd, args, { maxBuffer: 1024 * 1024 * 500 });
-
-    p.stdout.on("data", d => console.log(d.toString()));
-    p.stderr.on("data", d => console.error(d.toString()));
-
-    p.on("exit", code => {
-      if (code === 0) resolve();
-      else reject(new Error("Command failed: " + code));
-    });
-  });
-}
-
-async function download(url, out) {
-  await run("curl", ["-L", "--fail", "--silent", "--show-error", "-o", out, url]);
-}
-
-/* --------------------- RENDER --------------------- */
-
-app.post("/remotion-render", async (req, res) => {
-  if (active >= MAX) return res.status(503).json({ error: "Server busy" });
-
-  const jobId = uuidv4();
-  const dir = path.join(WORK, jobId);
-  await fs.mkdir(dir, { recursive: true });
-
-  const { scenes, audio } = req.body;
-  if (!Array.isArray(scenes) || scenes.length === 0) {
-    return res.status(400).json({ error: "Scenes required" });
+  // Validate required input
+  if (!scenes || !Array.isArray(scenes) || scenes.length === 0) {
+    return res.status(400).json({ error: 'scenes array is required' });
   }
 
-  JOBS[jobId] = { status: "rendering" };
+  // Check concurrency limit
+  if (activeRenders >= MAX_CONCURRENT) {
+    return res.status(429).json({ error: 'Server is busy, try again later' });
+  }
+
+  const jobId = generateJobId();
+  const outputPath = path.join(RENDERS_DIR, `${jobId}.mp4`);
+  const propsPath = path.join(PROPS_DIR, `${jobId}.json`);
+
+  // Initialize job state
+  jobs.set(jobId, {
+    status: 'queued',
+    outputPath,
+    propsPath,
+    error: null,
+    createdAt: new Date().toISOString()
+  });
+
+  // Start render in background
+  activeRenders++;
+  renderVideo(jobId, { scenes, audio }, propsPath, outputPath)
+    .catch(err => {
+      console.error(`[${jobId}] Render failed:`, err);
+      jobs.get(jobId).status = 'failed';
+      jobs.get(jobId).error = err.message;
+    })
+    .finally(() => {
+      activeRenders--;
+    });
+
   res.json({ jobId });
-
-  (async () => {
-    active++;
-    try {
-      console.log("JOB:", jobId);
-
-      // Download clips
-      for (let i = 0; i < scenes.length; i++) {
-        const f = path.join(dir, `scene_${i}.mp4`);
-        await download(scenes[i].src, f);
-        scenes[i].local = f;
-      }
-
-      if (audio?.src) {
-        const a = path.join(dir, "audio.mp3");
-        await download(audio.src, a);
-        audio.local = a;
-      }
-
-      // Write props
-      const propsPath = path.join(dir, "props.json");
-      await fs.writeFile(propsPath, JSON.stringify({ scenes, audio }));
-
-      const videoOut = path.join(dir, "video.mp4");
-
-      await run("remotion", [
-        "render",
-        "remotion/index.tsx",
-        "Video",
-        videoOut,
-        "--props=" + propsPath,
-        "--codec=h264",
-        "--browser-executable=/usr/bin/chromium",
-        "--chromium-flags=--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu,--single-process,--no-zygote",
-      ]);
-
-      const final = path.join(WORK, `${jobId}.mp4`);
-
-      if (audio?.local) {
-        await run("ffmpeg", [
-          "-y",
-          "-i", videoOut,
-          "-i", audio.local,
-          "-map", "0:v",
-          "-map", "1:a",
-          "-c:v", "copy",
-          "-c:a", "aac",
-          "-shortest",
-          final
-        ]);
-      } else {
-        await fs.rename(videoOut, final);
-      }
-
-      JOBS[jobId] = { status: "done", file: final };
-      console.log("DONE:", jobId);
-
-    } catch (e) {
-      console.error("RENDER FAILED:", e);
-      JOBS[jobId] = { status: "failed", error: e.message };
-    } finally {
-      active--;
-    }
-  })();
 });
 
-/* --------------------- STATUS --------------------- */
+// ============================
+// GET /status/:jobId
+// ============================
+app.get('/status/:jobId', (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found' });
+  }
 
-app.get("/status/:id", (req, res) => {
-  res.json(JOBS[req.params.id] || { status: "unknown" });
+  res.json({
+    jobId: req.params.jobId,
+    status: job.status,
+    error: job.error,
+    createdAt: job.createdAt
+  });
 });
 
-app.get("/download/:id", (req, res) => {
-  const j = JOBS[req.params.id];
-  if (!j || j.status !== "done") return res.status(404).json({ error: "Not ready" });
-  res.download(j.file);
+// ============================
+// GET /download/:jobId
+// ============================
+app.get('/download/:jobId', async (req, res) => {
+  const job = jobs.get(req.params.jobId);
+
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+
+  if (job.status !== 'done') {
+    return res.status(400).json({ error: `Job is ${job.status}` });
+  }
+
+  try {
+    await fs.access(job.outputPath);
+    res.download(job.outputPath, `${req.params.jobId}.mp4`);
+  } catch (err) {
+    res.status(500).json({ error: 'Video file not found' });
+  }
 });
 
-app.listen(PORT, () => console.log("REMOTION SERVER LIVE"));
+// ============================
+// Render Function
+// ============================
+async function renderVideo(jobId, props, propsPath, outputPath) {
+  const job = jobs.get(jobId);
+  
+  try {
+    console.log(`[${jobId}] Starting render`);
+    job.status = 'rendering';
+
+    // CRITICAL: Write props to disk BEFORE render
+    // Why: Remotion CLI reads props from file, not stdin
+    await fs.writeFile(propsPath, JSON.stringify(props, null, 2));
+    console.log(`[${jobId}] Props written to ${propsPath}`);
+
+    // Build Remotion CLI command
+    // Why single-line: Railway shell can't handle heredocs
+    const command = [
+      'npx remotion render',
+      'src/index.js',
+      'VideoComposition',
+      outputPath,
+      `--props=${propsPath}`,
+      '--codec=h264',
+      '--concurrency=1',
+      '--log=verbose'
+    ].join(' ');
+
+    console.log(`[${jobId}] Executing: ${command}`);
+
+    // Execute render
+    const { stdout, stderr } = await execAsync(command, {
+      maxBuffer: 50 * 1024 * 1024, // 50MB buffer for logs
+      cwd: __dirname
+    });
+
+    console.log(`[${jobId}] Render complete`);
+    if (stdout) console.log(`[${jobId}] stdout:`, stdout);
+    if (stderr) console.log(`[${jobId}] stderr:`, stderr);
+
+    // Verify output exists
+    await fs.access(outputPath);
+    
+    job.status = 'done';
+
+    // Cleanup props file
+    await fs.unlink(propsPath).catch(() => {});
+
+  } catch (error) {
+    console.error(`[${jobId}] Render error:`, error);
+    job.status = 'failed';
+    job.error = error.message;
+    throw error;
+  }
+}
+
+// ============================
+// Server Start
+// ============================
+async function startServer() {
+  // Ensure directories exist
+  await fs.mkdir(RENDERS_DIR, { recursive: true });
+  await fs.mkdir(PROPS_DIR, { recursive: true });
+
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    console.log(`Max concurrent renders: ${MAX_CONCURRENT}`);
+  });
+}
+
+startServer();
