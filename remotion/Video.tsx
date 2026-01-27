@@ -1,37 +1,30 @@
-import { AbsoluteFill, OffthreadVideo, Audio, Sequence, useVideoConfig } from 'remotion';
-import React from 'react';
+import {AbsoluteFill, Audio, Img, Sequence, Video as RemotionVideo} from 'remotion';
 
-export const CreateVideo: React.FC<{
-  scenes: Array<{
-    src: string;
-    durationInFrames?: number;
-  }>;
-  audio?: string;
-}> = ({ scenes, audio }) => {
-  const { fps } = useVideoConfig();
-  
-  let currentFrame = 0;
-
+export const Video = ({scenes, audio}) => {
   return (
-    <AbsoluteFill>
-      {scenes.map((scene, index) => {
-        const duration = scene.durationInFrames || fps * 5;
-        const from = currentFrame;
-        currentFrame += duration;
+    <AbsoluteFill style={{backgroundColor: 'black'}}>
+      {scenes.map((scene, i) => {
+        const fromFrame = Math.round(scene.start * scene.fps || 30);
+        const durationFrames = Math.round(scene.duration * scene.fps || 30);
 
         return (
-          <Sequence key={index} from={from} durationInFrames={duration}>
-            <AbsoluteFill>
-              <OffthreadVideo
-                src={scene.src}
-                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-              />
-            </AbsoluteFill>
+          <Sequence key={i} from={fromFrame} durationInFrames={durationFrames}>
+            {scene.type === "video" ? (
+              <RemotionVideo src={scene.local} />
+            ) : (
+              <Img src={scene.local} style={{objectFit: 'cover'}} />
+            )}
           </Sequence>
         );
       })}
-      
-      {audio && <Audio src={audio} />}
+
+      {audio && (
+        <Audio
+          src={audio.local}
+          startFrom={audio.trim ? Math.round(audio.trim[0] * 30) : 0}
+          durationInFrames={audio.trim ? Math.round((audio.trim[1] - audio.trim[0]) * 30) : undefined}
+        />
+      )}
     </AbsoluteFill>
   );
 };
