@@ -1,18 +1,15 @@
-import { AbsoluteFill, Sequence, Video, Img, Audio } from "remotion";
+import { AbsoluteFill, Video as RemotionVideo, Audio, getInputProps } from "remotion";
 
-export const Video = ({ scenes, audio }) => {
+export const Video = () => {
+  const { scenes, audio } = getInputProps();
+
   return (
     <AbsoluteFill>
       {scenes.map((s, i) => (
-        <Sequence key={i} from={s.start} durationInFrames={s.duration}>
-          {s.local.endsWith(".mp4") ? (
-            <Video src={s.local} />
-          ) : (
-            <Img src={s.local} />
-          )}
-        </Sequence>
+        <RemotionVideo key={i} src={s.src} />
       ))}
-      {audio && <Audio src={audio.local} />}
+
+      {audio?.src && <Audio src={audio.src} />}
     </AbsoluteFill>
   );
 };
