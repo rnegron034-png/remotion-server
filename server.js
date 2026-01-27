@@ -91,7 +91,11 @@ app.post("/remotion-render", async (req, res) => {
 
         /* 3) Write props */
         const propsPath = path.join(dir, "props.json");
-        await fs.writeFile(propsPath, JSON.stringify({ scenes, audio }, null, 2));
+       await fs.writeFile(props, JSON.stringify({
+  scenes: scenes.map(s => ({ src: s.local })),
+  audio: audio ? { src: audio.local } : null
+}));
+
 
         /* 4) Render */
         const video = path.join(dir, "video.mp4");
