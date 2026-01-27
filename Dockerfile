@@ -1,6 +1,6 @@
 FROM node:20-bullseye
 
-# System deps
+# Install system deps
 RUN apt-get update && apt-get install -y \
   ffmpeg \
   chromium \
@@ -32,14 +32,14 @@ ENV REMOTION_BROWSER=chromium
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-RUN npm install
 
-# 🔥 Install Remotion CLI globally
-RUN npm install -g remotion
+# Install everything INCLUDING remotion
+RUN npm install
+RUN npm install remotion @remotion/renderer
 
 COPY . .
 
-RUN mkdir -p /dev/shm && chmod 777 /dev/shm
+RUN mkdir -p /app/videos
 
 EXPOSE 8080
 CMD ["node", "server.js"]
