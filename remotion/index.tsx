@@ -1,5 +1,5 @@
 import { registerRoot, Composition } from "remotion";
-import { Video } from "./CreateVideo";
+import { Video } from "./Video";
 
 registerRoot(() => {
   return (
