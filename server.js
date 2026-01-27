@@ -97,25 +97,24 @@ app.post("/remotion-render", async (req, res) => {
           audio: audio ? { src: audio.local } : null
         }));
 
-        /* 4) Render Video */
+/* 4) Render Video */
 const video = path.join(dir, "video.mp4");
 
-// Use direct binary path instead of npx
-const remotionBinary = "./node_modules/.bin/remotion"; 
+// We now point to the binary that we just added to package.json
+const remotionBinary = "./node_modules/.bin/remotion";
 
 const cmd = [
   remotionBinary,
   "render",
-  "remotion/index.ts",
+  "remotion/index.ts", // This path is now CORRECT because server.js is in the root
   "Video",
   `"${video}"`,
   `--props="${propsPath}"`,
   "--codec=h264",
   "--browser-executable=/usr/bin/chromium",
-  // Optimized flags for Docker environments
   '--chromium-flags="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --single-process --no-zygote"',
   "--log=verbose",
-  "--concurrency=1" // Prevents memory crashes on smaller servers
+  "--concurrency=1"
 ].join(" ");
 
 await run(cmd);
