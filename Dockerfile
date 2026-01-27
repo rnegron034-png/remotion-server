@@ -1,6 +1,5 @@
 FROM node:20-bullseye
 
-# Install system dependencies
 RUN apt-get update && apt-get install -y \
     chromium \
     ffmpeg \
@@ -17,23 +16,18 @@ RUN apt-get update && apt-get install -y \
     libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Configure Chromium for Remotion
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 
 WORKDIR /app
 
-# Copy package files
 COPY package*.json ./
 
-# Install Node dependencies
 RUN npm install || npm install --legacy-peer-deps
 
-# Copy application code
 COPY . .
 
-# Create required directories
-RUN mkdir -p /app/renders /app/props
+RUN mkdir -p /app/renders
 
 EXPOSE 3000
 
