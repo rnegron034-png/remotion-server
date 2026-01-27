@@ -34,4 +34,5 @@ RUN npm install
 COPY . .
 
 EXPOSE 8080
+RUN mkdir -p /dev/shm && chmod 777 /dev/shm
 CMD ["node", "server.js"]
