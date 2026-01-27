@@ -1,7 +1,6 @@
 FROM node:20-bullseye
 
-# Install Chromium, FFmpeg, and required dependencies
-# Why: Remotion needs headless Chrome + FFmpeg for video encoding
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     chromium \
     ffmpeg \
@@ -18,8 +17,7 @@ RUN apt-get update && apt-get install -y \
     libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Set Chromium path for Remotion
-# Why: Remotion needs to find the system Chromium
+# Configure Chromium for Remotion
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 
@@ -28,14 +26,13 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies (works with or without lockfile)
-# Why: Railway may not have package-lock.json in repo
+# Install Node dependencies
 RUN npm install || npm install --legacy-peer-deps
 
 # Copy application code
 COPY . .
 
-# Create directories for renders and props
+# Create required directories
 RUN mkdir -p /app/renders /app/props
 
 EXPOSE 3000
