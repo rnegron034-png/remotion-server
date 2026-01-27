@@ -1,5 +1,6 @@
 FROM node:20-bullseye
 
+# Install dependencies
 RUN apt-get update && apt-get install -y \
     chromium \
     ffmpeg \
@@ -19,13 +20,16 @@ RUN apt-get update && apt-get install -y \
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 
+# Memory optimization for Node.js
+ENV NODE_OPTIONS="--max-old-space-size=1536"
+
 WORKDIR /app
 
 COPY package*.json ./
 
 RUN npm install || npm install --legacy-peer-deps
 
-COPY . .
+COPY server.js ./
 
 RUN mkdir -p /app/renders
 
