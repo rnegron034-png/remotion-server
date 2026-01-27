@@ -7,6 +7,7 @@ import fsSync from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
+// Environment setup for Remotion + Chromium
 process.env.PUPPETEER_EXECUTABLE_PATH = "/usr/bin/chromium";
 process.env.REMOTION_BROWSER = "chromium";
 
@@ -91,20 +92,19 @@ app.post("/remotion-render", async (req, res) => {
         }
 
         /* 3) Write props */
-        // FIX: Variable name is 'propsPath', not 'props'
         const propsPath = path.join(dir, "props.json");
         await fs.writeFile(propsPath, JSON.stringify({
           scenes: scenes.map(s => ({ src: s.local })),
           audio: audio ? { src: audio.local } : null
         }));
 
-
         /* 4) Render */
         const video = path.join(dir, "video.mp4");
 
-        // FIX: Used 'propsPath' inside the command
+        // FIX: Replaced 'npx remotion render' with direct path './node_modules/.bin/remotion render'
+        // This solves the "npm error could not determine executable" issue.
         const cmd = [
-          "npx remotion render",
+          "./node_modules/.bin/remotion render",
           "remotion/index.ts",
           "Video",
           `"${video}"`,
@@ -117,27 +117,29 @@ app.post("/remotion-render", async (req, res) => {
 
         await run(cmd);
 
-
         /* 5) Mux audio */
         const final = path.join(WORK, `${jobId}.mp4`);
 
         if (audio?.local) {
+          // Merge audio if present
           await run(
             `ffmpeg -y -i "${video}" -i "${audio.local}" -map 0:v -map 1:a -c:v copy -c:a aac -shortest "${final}"`
           );
         } else {
+          // Just rename if no audio
           await fs.rename(video, final);
         }
 
         JOBS[jobId] = { status: "done", file: final };
         console.log("DONE", jobId);
+
       } catch (e) {
         console.error("RENDER FAILED:", e);
         JOBS[jobId] = { status: "failed", error: e.message };
       } finally {
         active--;
-        // Optional: Clean up temporary folder 'dir' here to save space
-        // await fs.rm(dir, { recursive: true, force: true }).catch(console.error);
+        // Optional: cleanup temp folder
+        // await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
       }
     })();
   } catch (err) {
