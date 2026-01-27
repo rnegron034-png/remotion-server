@@ -7,7 +7,7 @@ import fsSync from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
-// Environment setup for Remotion + Chromium
+// Set Chromium path for the environment
 process.env.PUPPETEER_EXECUTABLE_PATH = "/usr/bin/chromium";
 process.env.REMOTION_BROWSER = "chromium";
 
@@ -18,7 +18,6 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 const WORK = path.join(__dirname, "videos");
 
-// Ensure videos directory exists
 if (!fsSync.existsSync(WORK)) fsSync.mkdirSync(WORK, { recursive: true });
 
 app.use(cors());
@@ -32,7 +31,7 @@ const MAX = 1;
 
 function run(cmd) {
   return new Promise((resolve, reject) => {
-    console.log("\nRUN:", cmd);
+    console.log("\nRUNNING COMMAND:", cmd);
 
     const p = exec(cmd, {
       maxBuffer: 1024 * 1024 * 500,
@@ -75,7 +74,7 @@ app.post("/remotion-render", async (req, res) => {
     (async () => {
       active++;
       try {
-        console.log("\n=== JOB", jobId, "===");
+        console.log("\n=== STARTING JOB:", jobId, "===");
 
         /* 1) Download clips */
         for (let i = 0; i < scenes.length; i++) {
@@ -98,14 +97,12 @@ app.post("/remotion-render", async (req, res) => {
           audio: audio ? { src: audio.local } : null
         }));
 
-        /* 4) Render */
+        /* 4) Render Video */
         const video = path.join(dir, "video.mp4");
 
-        // FIX: Replaced 'npx remotion render' with direct path './node_modules/.bin/remotion render'
-        // This solves the "npm error could not determine executable" issue.
         const cmd = [
-          "./node_modules/.bin/remotion render",
-          "remotion/index.ts",
+          "npx remotion render",
+          "remotion/index.ts", // Matches your file structure
           "Video",
           `"${video}"`,
           `--props="${propsPath}"`,
@@ -117,29 +114,24 @@ app.post("/remotion-render", async (req, res) => {
 
         await run(cmd);
 
-        /* 5) Mux audio */
+        /* 5) Final Mux with Audio */
         const final = path.join(WORK, `${jobId}.mp4`);
 
         if (audio?.local) {
-          // Merge audio if present
           await run(
             `ffmpeg -y -i "${video}" -i "${audio.local}" -map 0:v -map 1:a -c:v copy -c:a aac -shortest "${final}"`
           );
         } else {
-          // Just rename if no audio
           await fs.rename(video, final);
         }
 
         JOBS[jobId] = { status: "done", file: final };
-        console.log("DONE", jobId);
-
+        console.log("SUCCESS:", jobId);
       } catch (e) {
         console.error("RENDER FAILED:", e);
         JOBS[jobId] = { status: "failed", error: e.message };
       } finally {
         active--;
-        // Optional: cleanup temp folder
-        // await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
       }
     })();
   } catch (err) {
@@ -147,8 +139,6 @@ app.post("/remotion-render", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
-/* ======================= STATUS ======================= */
 
 app.get("/status/:id", (req, res) => {
   res.json(JOBS[req.params.id] || { status: "unknown" });
@@ -160,4 +150,4 @@ app.get("/download/:id", (req, res) => {
   res.download(j.file);
 });
 
-app.listen(PORT, () => console.log("REMOTION SERVER LIVE"));
+app.listen(PORT, () => console.log(`SERVER RUNNING ON PORT ${PORT}`));
