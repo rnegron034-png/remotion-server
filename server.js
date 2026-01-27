@@ -1,6 +1,8 @@
 import express from 'express';
-import { exec } from 'child_process';
+import { bundle } from '@remotion/bundler';
+import { renderMedia, getCompositions } from '@remotion/renderer';
 import { promisify } from 'util';
+import { exec } from 'child_process';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -19,12 +21,14 @@ let activeRenders = 0;
 const MAX_CONCURRENT = 1;
 
 const RENDERS_DIR = path.join(__dirname, 'renders');
-const PROPS_DIR = path.join(__dirname, 'props');
 
 function generateJobId() {
   return `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
 
+// ============================
+// POST /remotion-render
+// ============================
 app.post('/remotion-render', async (req, res) => {
   const { scenes, audio } = req.body;
 
@@ -38,18 +42,16 @@ app.post('/remotion-render', async (req, res) => {
 
   const jobId = generateJobId();
   const outputPath = path.join(RENDERS_DIR, `${jobId}.mp4`);
-  const propsPath = path.join(PROPS_DIR, `${jobId}.json`);
 
   jobs.set(jobId, {
     status: 'queued',
     outputPath,
-    propsPath,
     error: null,
     createdAt: new Date().toISOString()
   });
 
   activeRenders++;
-  renderVideo(jobId, { scenes, audio }, propsPath, outputPath)
+  renderVideo(jobId, { scenes, audio }, outputPath)
     .catch(err => {
       console.error(`[${jobId}] Render failed:`, err);
       const job = jobs.get(jobId);
@@ -65,6 +67,9 @@ app.post('/remotion-render', async (req, res) => {
   res.json({ jobId });
 });
 
+// ============================
+// GET /status/:jobId
+// ============================
 app.get('/status/:jobId', (req, res) => {
   const job = jobs.get(req.params.jobId);
   
@@ -80,6 +85,9 @@ app.get('/status/:jobId', (req, res) => {
   });
 });
 
+// ============================
+// GET /download/:jobId
+// ============================
 app.get('/download/:jobId', async (req, res) => {
   const job = jobs.get(req.params.jobId);
 
@@ -99,45 +107,70 @@ app.get('/download/:jobId', async (req, res) => {
   }
 });
 
-async function renderVideo(jobId, props, propsPath, outputPath) {
+// ============================
+// Render Function (Programmatic API)
+// ============================
+async function renderVideo(jobId, inputProps, outputPath) {
   const job = jobs.get(jobId);
-  
+  let bundleLocation = null;
+
   try {
-    console.log(`[${jobId}] Starting render`);
+    console.log(`[${jobId}] Starting render with props:`, JSON.stringify(inputProps));
+    job.status = 'bundling';
+
+    // Step 1: Bundle the Remotion project
+    const entryPoint = path.join(__dirname, 'src', 'index.js');
+    console.log(`[${jobId}] Bundling from ${entryPoint}`);
+
+    bundleLocation = await bundle({
+      entryPoint,
+      webpackOverride: (config) => config,
+    });
+
+    console.log(`[${jobId}] Bundle created at ${bundleLocation}`);
     job.status = 'rendering';
 
-    await fs.writeFile(propsPath, JSON.stringify(props, null, 2));
-    console.log(`[${jobId}] Props written to ${propsPath}`);
+    // Step 2: Get available compositions
+    const compositions = await getCompositions(bundleLocation, {
+      inputProps,
+    });
 
-    const command = [
-      'npx remotion render',
-      'src/index.js',
-      'VideoComposition',
-      outputPath,
-      `--props=${propsPath}`,
-      '--codec=h264',
-      '--concurrency=1',
-      '--log=verbose'
-    ].join(' ');
+    console.log(`[${jobId}] Available compositions:`, compositions.map(c => c.id));
 
-    console.log(`[${jobId}] Executing: ${command}`);
+    const composition = compositions.find(c => c.id === 'VideoComposition');
+    if (!composition) {
+      throw new Error('VideoComposition not found');
+    }
 
-    const { stdout, stderr } = await execAsync(command, {
-      maxBuffer: 50 * 1024 * 1024,
-      cwd: __dirname,
-      timeout: 600000
+    console.log(`[${jobId}] Rendering composition:`, composition.id);
+
+    // Step 3: Render the video
+    await renderMedia({
+      composition,
+      serveUrl: bundleLocation,
+      codec: 'h264',
+      outputLocation: outputPath,
+      inputProps,
+      concurrency: 1,
+      verbose: true,
+      onProgress: ({ progress, renderedFrames, encodedFrames }) => {
+        const percent = (progress * 100).toFixed(1);
+        console.log(`[${jobId}] Progress: ${percent}% (${renderedFrames} frames rendered, ${encodedFrames} encoded)`);
+      },
     });
 
     console.log(`[${jobId}] Render complete`);
-    if (stdout) console.log(`[${jobId}] stdout:`, stdout);
-    if (stderr) console.log(`[${jobId}] stderr:`, stderr);
 
+    // Verify output exists
     await fs.access(outputPath);
-    
     job.status = 'done';
 
-    await fs.unlink(propsPath).catch(() => {});
+    // Cleanup bundle
+    if (bundleLocation) {
+      await fs.rm(bundleLocation, { recursive: true, force: true }).catch(() => {});
+    }
 
+    // Kill lingering Chromium processes
     try {
       await execAsync('pkill -f chromium || true');
     } catch (e) {}
@@ -146,13 +179,21 @@ async function renderVideo(jobId, props, propsPath, outputPath) {
     console.error(`[${jobId}] Render error:`, error);
     job.status = 'failed';
     job.error = error.message;
+
+    // Cleanup bundle on error
+    if (bundleLocation) {
+      await fs.rm(bundleLocation, { recursive: true, force: true }).catch(() => {});
+    }
+
     throw error;
   }
 }
 
+// ============================
+// Server Start
+// ============================
 async function startServer() {
   await fs.mkdir(RENDERS_DIR, { recursive: true });
-  await fs.mkdir(PROPS_DIR, { recursive: true });
 
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
