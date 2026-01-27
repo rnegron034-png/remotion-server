@@ -87,14 +87,15 @@ app.post("/remotion-render", async (req, res) => {
       /* 3) Render with Remotion */
       const video = path.join(dir, "video.mp4");
 
-await run(`
-remotion render remotion/index.ts Video ... "${video}"
---props="${props}"
---codec=h264
---browser-executable=/usr/bin/chromium
---chromium-flags="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --single-process --no-zygote"
---log=verbose
-`);
+await run(
+  `remotion render remotion/index.ts Video "${video}" ` +
+  `--props="${props}" ` +
+  `--codec=h264 ` +
+  `--browser-executable=/usr/bin/chromium ` +
+  `--chromium-flags="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --single-process --no-zygote" ` +
+  `--log=verbose`
+);
+
 
       /* 4) Mux audio */
       const final = path.join(WORK, `${jobId}.mp4`);
