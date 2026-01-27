@@ -1,6 +1,5 @@
 FROM node:20-bullseye
 
-# System deps for Chromium + FFmpeg
 RUN apt-get update && apt-get install -y \
   ffmpeg \
   chromium \
@@ -29,14 +28,12 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV REMOTION_BROWSER=chromium
 
 WORKDIR /app
-
 COPY package.json package-lock.json* ./
+
 RUN npm install
-RUN npm install -g remotion
+RUN npm install -g remotion   # <<< THIS WAS MISSING
 
 COPY . .
-
-RUN mkdir -p /dev/shm && chmod 777 /dev/shm
 
 EXPOSE 8080
 CMD ["node", "server.js"]
