@@ -1,7 +1,6 @@
 import { AbsoluteFill, OffthreadVideo, Audio, Sequence, useVideoConfig } from 'remotion';
 import React from 'react';
 
-// ADD "export" HERE ↓
 export const CreateVideo: React.FC<{
   scenes: Array<{
     src: string;
