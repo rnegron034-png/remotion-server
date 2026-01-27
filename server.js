@@ -5,6 +5,24 @@ const fs = require('fs').promises;
 const path = require('path');
 
 const execAsync = promisify(exec);
+// In renderVideo function, after execAsync:
+
+const { stdout, stderr } = await execAsync(command, {
+  maxBuffer: 50 * 1024 * 1024,
+  cwd: __dirname,
+  timeout: 600000 // 10 minute timeout (prevents zombie processes)
+});
+
+console.log(`[${jobId}] Render complete`);
+if (stdout) console.log(`[${jobId}] stdout:`, stdout);
+if (stderr) console.log(`[${jobId}] stderr:`, stderr);
+
+// NEW: Kill any lingering Chromium processes
+try {
+  await execAsync('pkill -f chromium || true');
+} catch (e) {
+  // Ignore errors
+}
 const app = express();
 const PORT = process.env.PORT || 3000;
 
