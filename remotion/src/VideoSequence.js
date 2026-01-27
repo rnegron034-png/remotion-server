@@ -1,16 +1,19 @@
 import React from 'react';
-import { Series, Video, Audio, getInputProps } from 'remotion';
+import { Series, Video, Audio } from 'remotion';
 
-export const VideoSequence = () => {
-  // CRITICAL FIX: Use getInputProps() to retrieve props from CLI
-  const inputProps = getInputProps();
-  const scenes = inputProps?.scenes || [];
-  const audio = inputProps?.audio || null;
+export const VideoSequence = ({ scenes = [], audio = null }) => {
+  // Log received props for debugging
+  console.log('VideoSequence scenes:', scenes);
+  console.log('VideoSequence audio:', audio);
 
-  console.log('VideoSequence received props:', inputProps);
+  // Validate scenes
+  if (!Array.isArray(scenes)) {
+    console.error('scenes is not an array:', typeof scenes);
+    return null;
+  }
 
   if (scenes.length === 0) {
-    console.warn('No scenes provided to VideoSequence');
+    console.warn('No scenes provided');
     return null;
   }
 
@@ -18,20 +21,20 @@ export const VideoSequence = () => {
     <>
       <Series>
         {scenes.map((scene, index) => {
-          if (!scene || !scene.src) {
-            console.warn(`Scene ${index} is missing src`);
+          if (!scene || typeof scene !== 'object' || !scene.src) {
+            console.warn(`Scene ${index} invalid:`, scene);
             return null;
           }
 
           return (
             <Series.Sequence key={index} durationInFrames={150}>
-              <Video src={scene.src} />
+              <Video src={scene.src} startFrom={0} />
             </Series.Sequence>
           );
         })}
       </Series>
 
-      {audio && audio.src && (
+      {audio && typeof audio === 'object' && audio.src && (
         <Audio src={audio.src} />
       )}
     </>
