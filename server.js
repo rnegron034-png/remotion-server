@@ -52,8 +52,8 @@ export const VideoComposition = () => {
       component={VideoSequence}
       durationInFrames={300}
       fps={30}
-      width={1920}
-      height={1080}
+      width={1280}
+      height={720}
     />
   );
 };
@@ -64,7 +64,7 @@ import React from 'react';
 import { Series, Video, Audio } from 'remotion';
 
 export const VideoSequence = ({ scenes = [], audio = null }) => {
-  console.log('VideoSequence received scenes:', scenes);
+  console.log('VideoSequence rendering', scenes.length, 'scenes at 720p');
 
   if (!Array.isArray(scenes) || scenes.length === 0) {
     return (
@@ -107,7 +107,7 @@ export const VideoSequence = ({ scenes = [], audio = null }) => {
   await fs.writeFile(path.join(SRC_DIR, 'VideoComposition.js'), compositionContent);
   await fs.writeFile(path.join(SRC_DIR, 'VideoSequence.js'), sequenceContent);
 
-  console.log('Remotion source files created');
+  console.log('✓ Remotion source files created (720p mode)');
 }
 
 // ============================
@@ -133,6 +133,7 @@ app.post('/remotion-render', async (req, res) => {
     error: null,
     progress: 0,
     stage: 'queued',
+    resolution: '1280x720',
     createdAt: new Date().toISOString()
   });
 
@@ -150,7 +151,7 @@ app.post('/remotion-render', async (req, res) => {
       activeRenders--;
     });
 
-  res.json({ jobId });
+  res.json({ jobId, resolution: '1280x720' });
 });
 
 // ============================
@@ -166,8 +167,9 @@ app.get('/status/:jobId', (req, res) => {
   res.json({
     jobId: req.params.jobId,
     status: job.status,
-    progress: job.progress || 0,
+    progress: Math.round(job.progress || 0),
     stage: job.stage || 'unknown',
+    resolution: job.resolution,
     error: job.error,
     createdAt: job.createdAt
   });
@@ -196,14 +198,14 @@ app.get('/download/:jobId', async (req, res) => {
 });
 
 // ============================
-// Render Function (MEMORY OPTIMIZED)
+// Render Function (720p OPTIMIZED)
 // ============================
 async function renderVideo(jobId, inputProps, outputPath) {
   const job = jobs.get(jobId);
   let bundleLocation = null;
 
   try {
-    console.log(`[${jobId}] Starting render`);
+    console.log(`[${jobId}] Starting 720p render with ${inputProps.scenes.length} scenes`);
     job.status = 'bundling';
     job.stage = 'bundling';
     job.progress = 5;
@@ -229,12 +231,12 @@ async function renderVideo(jobId, inputProps, outputPath) {
       throw new Error('VideoComposition not found');
     }
 
-    console.log(`[${jobId}] Starting render`);
+    console.log(`[${jobId}] Starting render at 1280x720`);
     job.status = 'rendering';
     job.stage = 'rendering frames';
     job.progress = 20;
 
-    // CRITICAL: Memory-optimized settings for Railway
+    // CRITICAL: 720p memory-optimized settings
     await renderMedia({
       composition,
       serveUrl: bundleLocation,
@@ -242,51 +244,58 @@ async function renderVideo(jobId, inputProps, outputPath) {
       outputLocation: outputPath,
       inputProps,
       
-      // MEMORY OPTIMIZATION
-      concurrency: 1, // Single thread only
-      imageFormat: 'jpeg', // Use JPEG instead of PNG (less memory)
-      jpegQuality: 80, // Lower quality = less memory
-      scale: 1, // Don't upscale
+      // MEMORY OPTIMIZATION FOR FREE TIER
+      concurrency: 1,
+      imageFormat: 'jpeg',
+      jpegQuality: 75,
+      scale: 1,
+      
+      // Chromium settings
       chromiumOptions: {
         headless: true,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage', // Critical for low memory
+          '--disable-dev-shm-usage',
           '--disable-accelerated-2d-canvas',
           '--disable-gpu',
-          '--single-process', // Critical for Railway
+          '--single-process',
           '--no-zygote',
           '--disable-web-security',
+          '--disable-features=VizDisplayCompositor',
         ],
       },
       
-      // Lower encoding quality to reduce memory
-      crf: 23, // Higher = lower quality, less memory (default 18)
+      // Encoding settings (optimized for 720p)
+      crf: 25,
+      pixelFormat: 'yuv420p',
+      x264Preset: 'ultrafast',
+      enforceAudioTrack: false,
       
-      verbose: false, // Reduce log output
+      verbose: false,
       
       onProgress: ({ progress, renderedFrames, encodedFrames, stitchStage }) => {
         const percent = Math.round(progress * 100);
         
-        // Update job progress
-        job.progress = 20 + (percent * 0.75); // 20-95% range
+        job.progress = 20 + (percent * 0.75);
         
         if (stitchStage) {
           job.stage = `encoding video (${stitchStage})`;
         } else if (encodedFrames > 0) {
-          job.stage = `encoding frames (${encodedFrames}/${renderedFrames})`;
+          job.stage = `encoding (${encodedFrames}/${renderedFrames} frames)`;
         } else {
-          job.stage = `rendering frames (${renderedFrames})`;
+          job.stage = `rendering (${renderedFrames} frames)`;
         }
         
-        console.log(`[${jobId}] ${job.stage} - ${percent}%`);
+        if (percent % 10 === 0) {
+          console.log(`[${jobId}] ${job.stage} - ${percent}%`);
+        }
       },
       
-      onBrowserLog: () => {}, // Disable browser logs to save memory
+      onBrowserLog: () => {},
     });
 
-    console.log(`[${jobId}] Render complete`);
+    console.log(`[${jobId}] ✓ Render complete`);
     job.progress = 100;
     job.stage = 'complete';
 
@@ -303,7 +312,7 @@ async function renderVideo(jobId, inputProps, outputPath) {
     } catch (e) {}
 
   } catch (error) {
-    console.error(`[${jobId}] Render error:`, error);
+    console.error(`[${jobId}] ✗ Render error:`, error.message);
     job.status = 'failed';
     job.error = error.message;
     job.stage = 'failed';
@@ -324,8 +333,9 @@ async function startServer() {
   await ensureRemotionFiles();
 
   app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    console.log(`Max concurrent renders: ${MAX_CONCURRENT}`);
+    console.log(`✓ Server running on port ${PORT}`);
+    console.log(`✓ Rendering at 1280x720 (optimized for Railway free tier)`);
+    console.log(`✓ Max concurrent renders: ${MAX_CONCURRENT}`);
   });
 }
 
