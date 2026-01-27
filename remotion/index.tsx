@@ -1,12 +1,11 @@
-import { registerRoot } from 'remotion';
-import { Composition } from 'remotion';
+import { registerRoot, Composition } from 'remotion';
 import { CreateVideo } from './Video';
 
 registerRoot(() => {
   return (
     <>
       <Composition
-        id="CreateVideo"
+        id="Video"  // ← Change this from "CreateVideo" to "Video"
         component={CreateVideo}
         durationInFrames={300}
         fps={30}
