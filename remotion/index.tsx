@@ -1,17 +1,21 @@
-import { registerRoot, Composition } from "remotion";
-import { Video } from "./Video";
+import { Composition } from 'remotion';
+import { CreateVideo } from './Video';
 
-registerRoot(() => {
+export const RemotionRoot: React.FC = () => {
   return (
     <>
       <Composition
-        id="Video"
-        component={Video}
-        width={1080}
-        height={1920}
+        id="CreateVideo"
+        component={CreateVideo}
+        durationInFrames={300}
         fps={30}
-        durationInFrames={900}
+        width={1920}
+        height={1080}
+        defaultProps={{
+          scenes: [],
+          audio: ''
+        }}
       />
     </>
   );
-});
+};
