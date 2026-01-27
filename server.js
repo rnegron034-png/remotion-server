@@ -88,7 +88,7 @@ app.post("/remotion-render", async (req, res) => {
       const video = path.join(dir, "video.mp4");
 
 await run(`
-npx remotion render remotion/index.ts Video "${video}"
+remotion render remotion/index.ts Video ... "${video}"
 --props="${props}"
 --codec=h264
 --browser-executable=/usr/bin/chromium
