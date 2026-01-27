@@ -103,10 +103,12 @@ const video = path.join(dir, "video.mp4");
 // We now point to the binary that we just added to package.json
 const remotionBinary = "./node_modules/.bin/remotion";
 
+/* Inside server.js */
+
 const cmd = [
   remotionBinary,
   "render",
-  "remotion/index.ts", // This path is now CORRECT because server.js is in the root
+  "remotion/index.tsx",  // <--- CHANGE THIS LINE (it was .ts)
   "Video",
   `"${video}"`,
   `--props="${propsPath}"`,
