@@ -1,28 +1,15 @@
-const express = require('express');
-const { exec } = require('child_process');
-const { promisify } = require('util');
-const fs = require('fs').promises;
-const path = require('path');
+import express from 'express';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import fs from 'fs/promises';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+// ES module equivalent of __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const execAsync = promisify(exec);
-// In renderVideo function, after execAsync:
-
-const { stdout, stderr } = await execAsync(command, {
-  maxBuffer: 50 * 1024 * 1024,
-  cwd: __dirname,
-  timeout: 600000 // 10 minute timeout (prevents zombie processes)
-});
-
-console.log(`[${jobId}] Render complete`);
-if (stdout) console.log(`[${jobId}] stdout:`, stdout);
-if (stderr) console.log(`[${jobId}] stderr:`, stderr);
-
-// NEW: Kill any lingering Chromium processes
-try {
-  await execAsync('pkill -f chromium || true');
-} catch (e) {
-  // Ignore errors
-}
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -31,7 +18,7 @@ app.use(express.json({ limit: '10mb' }));
 // Job tracking
 const jobs = new Map();
 let activeRenders = 0;
-const MAX_CONCURRENT = 1; // Railway memory limit
+const MAX_CONCURRENT = 1;
 
 // Helpers
 const RENDERS_DIR = path.join(__dirname, 'renders');
@@ -75,8 +62,11 @@ app.post('/remotion-render', async (req, res) => {
   renderVideo(jobId, { scenes, audio }, propsPath, outputPath)
     .catch(err => {
       console.error(`[${jobId}] Render failed:`, err);
-      jobs.get(jobId).status = 'failed';
-      jobs.get(jobId).error = err.message;
+      const job = jobs.get(jobId);
+      if (job) {
+        job.status = 'failed';
+        job.error = err.message;
+      }
     })
     .finally(() => {
       activeRenders--;
@@ -135,13 +125,11 @@ async function renderVideo(jobId, props, propsPath, outputPath) {
     console.log(`[${jobId}] Starting render`);
     job.status = 'rendering';
 
-    // CRITICAL: Write props to disk BEFORE render
-    // Why: Remotion CLI reads props from file, not stdin
+    // Write props to disk BEFORE render
     await fs.writeFile(propsPath, JSON.stringify(props, null, 2));
     console.log(`[${jobId}] Props written to ${propsPath}`);
 
     // Build Remotion CLI command
-    // Why single-line: Railway shell can't handle heredocs
     const command = [
       'npx remotion render',
       'src/index.js',
@@ -157,8 +145,9 @@ async function renderVideo(jobId, props, propsPath, outputPath) {
 
     // Execute render
     const { stdout, stderr } = await execAsync(command, {
-      maxBuffer: 50 * 1024 * 1024, // 50MB buffer for logs
-      cwd: __dirname
+      maxBuffer: 50 * 1024 * 1024,
+      cwd: __dirname,
+      timeout: 600000 // 10 minute timeout
     });
 
     console.log(`[${jobId}] Render complete`);
@@ -172,6 +161,13 @@ async function renderVideo(jobId, props, propsPath, outputPath) {
 
     // Cleanup props file
     await fs.unlink(propsPath).catch(() => {});
+
+    // Kill any lingering Chromium processes
+    try {
+      await execAsync('pkill -f chromium || true');
+    } catch (e) {
+      // Ignore errors
+    }
 
   } catch (error) {
     console.error(`[${jobId}] Render error:`, error);
