@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y \
   libcairo2 \
   libgtk-3-0 \
   libx11-xcb1 \
+  curl \
   && rm -rf /var/lib/apt/lists/*
 
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
@@ -29,10 +30,7 @@ ENV REMOTION_BROWSER=chromium
 
 WORKDIR /app
 COPY package.json package-lock.json* ./
-
 RUN npm install
-RUN npm install -g remotion   # <<< THIS WAS MISSING
-
 COPY . .
 
 EXPOSE 8080
