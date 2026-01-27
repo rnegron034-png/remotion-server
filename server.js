@@ -1,5 +1,119 @@
 import express from "express";
 import cors from "cors";
+import { exec } from "child_process";
+import { v4 as uuidv4 } from "uuid";
+import fs from "fs";
+import fsp from "fs/promises";
+import path from "path";
+
+const app = express();
+const PORT = process.env.PORT || 8080;
+const WORK = "/app/videos";
+
+if (!fs.existsSync(WORK)) fs.mkdirSync(WORK, { recursive: true });
+
+app.use(cors());
+app.use(express.json({ limit: "200mb" }));
+
+const JOBS = {};
+let active = 0;
+const MAX = 1;
+
+function run(cmd) {
+  return new Promise((resolve, reject) => {
+    console.log("\nRUN:", cmd);
+    exec(cmd, { maxBuffer: 1024 * 1024 * 500 }, (err, stdout, stderr) => {
+      if (stdout) console.log(stdout);
+      if (stderr) console.error(stderr);
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
+async function download(url, out) {
+  await run(`curl -L --fail -o "${out}" "${url}"`);
+}
+
+/* ================= RENDER ================= */
+
+app.post("/remotion-render", async (req, res) => {
+  if (active >= MAX) return res.status(503).json({ error: "Server busy" });
+
+  const { scenes, audio } = req.body;
+  if (!Array.isArray(scenes) || scenes.length === 0)
+    return res.status(400).json({ error: "Scenes required" });
+
+  const jobId = uuidv4();
+  const dir = path.join(WORK, jobId);
+  await fsp.mkdir(dir, { recursive: true });
+
+  JOBS[jobId] = { status: "rendering" };
+  res.json({ jobId });
+
+  (async () => {
+    active++;
+    try {
+      console.log("JOB", jobId);
+
+      // download scenes
+      for (let i = 0; i < scenes.length; i++) {
+        const p = path.join(dir, `scene_${i}.mp4`);
+        await download(scenes[i].src, p);
+        scenes[i].local = p;
+      }
+
+      // download audio
+      let audioPath = null;
+      if (audio?.src) {
+        audioPath = path.join(dir, "audio.mp3");
+        await download(audio.src, audioPath);
+      }
+
+      const propsPath = path.join(dir, "props.json");
+      await fsp.writeFile(propsPath, JSON.stringify({ scenes }));
+
+      const rawVideo = path.join(dir, "video.mp4");
+      const finalVideo = path.join(WORK, `${jobId}.mp4`);
+
+      // CRITICAL: one-line remotion call
+      await run(
+        `remotion render remotion/index.ts Video "${rawVideo}" --props="${propsPath}" --codec=h264 --browser-executable=/usr/bin/chromium --chromium-flags="--no-sandbox --disable-dev-shm-usage --disable-gpu"`
+      );
+
+      if (audioPath) {
+        await run(
+          `ffmpeg -y -i "${rawVideo}" -i "${audioPath}" -map 0:v -map 1:a -c:v copy -c:a aac -shortest "${finalVideo}"`
+        );
+      } else {
+        await fsp.rename(rawVideo, finalVideo);
+      }
+
+      JOBS[jobId] = { status: "done", file: finalVideo };
+    } catch (e) {
+      console.error("FAILED:", e);
+      JOBS[jobId] = { status: "failed", error: e.message };
+    } finally {
+      active--;
+    }
+  })();
+});
+
+/* ================= STATUS ================= */
+
+app.get("/status/:id", (req, res) => {
+  res.json(JOBS[req.params.id] || { status: "unknown" });
+});
+
+app.get("/download/:id", (req, res) => {
+  const j = JOBS[req.params.id];
+  if (!j || j.status !== "done") return res.status(404).json({ error: "Not ready" });
+  res.download(j.file);
+});
+
+app.listen(PORT, () => console.log("REMOTION SERVER LIVE"));
+import express from "express";
+import cors from "cors";
 import { v4 as uuidv4 } from "uuid";
 import { execFile } from "child_process";
 import fs from "fs/promises";
