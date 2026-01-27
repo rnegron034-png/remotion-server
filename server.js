@@ -96,13 +96,15 @@ app.post("/remotion-render", async (req, res) => {
         /* 4) Render */
         const video = path.join(dir, "video.mp4");
 
-        const cmd =
-          `remotion render remotion/index.ts Video "${video}" ` +
-          `--props="${propsPath}" ` +
-          `--codec=h264 ` +
-          `--browser-executable=/usr/bin/chromium ` +
-          `--chromium-flags="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --single-process --no-zygote" ` +
-          `--log=verbose`;
+        const cmd = `npx remotion render remotion/index.ts Video "${video}"
+  --props="${props}"
+  --codec=h264
+  --browser-executable=/usr/bin/chromium
+  --chromium-flags="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --single-process --no-zygote"
+  --log=verbose`.replace(/\n/g, " ");
+
+await run(cmd);
+
 
         await run(cmd);
 
