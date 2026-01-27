@@ -10,15 +10,18 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# 1. Copy package files
-COPY package*.json ./
+# 1. Copy ONLY package.json (Ignore package-lock.json to avoid Windows/Linux conflicts)
+COPY package.json ./
 
 # 2. Install dependencies
-# CHANGED: Switched from 'npm ci' to 'npm install' to fix the missing lockfile error
+# Using 'npm install' without a lockfile allows it to resolve fresh for Linux
 RUN npm install
 
-# 3. Copy the rest of your app code
+# 3. Copy app code
 COPY . .
+
+# 4. SAFETY: Rebuild esbuild specifically for Linux (Fixes the "undefined" error)
+RUN npm rebuild esbuild
 
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
