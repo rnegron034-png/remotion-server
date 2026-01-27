@@ -1,47 +1,43 @@
 FROM node:20-bullseye
 
-# Install system deps
+# Install Chromium, FFmpeg, and required dependencies
+# Why: Remotion needs headless Chrome + FFmpeg for video encoding
 RUN apt-get update && apt-get install -y \
-  ffmpeg \
-  chromium \
-  fonts-liberation \
-  libnss3 \
-  libxss1 \
-  libasound2 \
-  libatk1.0-0 \
-  libatk-bridge2.0-0 \
-  libcups2 \
-  libdrm2 \
-  libxcomposite1 \
-  libxrandr2 \
-  libgbm1 \
-  libxdamage1 \
-  libxshmfence1 \
-  libxkbcommon0 \
-  libpangocairo-1.0-0 \
-  libpango-1.0-0 \
-  libcairo2 \
-  libgtk-3-0 \
-  libx11-xcb1 \
-  && rm -rf /var/lib/apt/lists/*
+    chromium \
+    ffmpeg \
+    fonts-liberation \
+    libnss3 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
+    && rm -rf /var/lib/apt/lists/*
 
-# Puppeteer / Remotion settings
+# Set Chromium path for Remotion
+# Why: Remotion needs to find the system Chromium
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-ENV REMOTION_BROWSER=chromium
+ENV PUPPETEER_SKIP_DOWNLOAD=true
 
 WORKDIR /app
 
 # Copy package files
-COPY package.json ./
+COPY package*.json ./
 
-# Install deps
-RUN npm install
+# Install dependencies (works with or without lockfile)
+# Why: Railway may not have package-lock.json in repo
+RUN npm install || npm install --legacy-peer-deps
 
-# Install Remotion CLI globally
-RUN npm install -g remotion
-
-# Copy rest
+# Copy application code
 COPY . .
 
-EXPOSE 8080
+# Create directories for renders and props
+RUN mkdir -p /app/renders /app/props
+
+EXPOSE 3000
+
 CMD ["node", "server.js"]
