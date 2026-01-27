@@ -10,12 +10,12 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# 1. Copy ONLY package files first
+# 1. Copy package files
 COPY package*.json ./
 
-# 2. Install dependencies (Clean install)
-# This will now be SAFE because .dockerignore prevents overwriting
-RUN npm ci
+# 2. Install dependencies
+# CHANGED: Switched from 'npm ci' to 'npm install' to fix the missing lockfile error
+RUN npm install
 
 # 3. Copy the rest of your app code
 COPY . .
