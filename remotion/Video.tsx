@@ -1,15 +1,40 @@
-import { AbsoluteFill, Video as RemotionVideo, Audio, getInputProps } from "remotion";
+import { AbsoluteFill, Video, Audio, Sequence, useVideoConfig } from 'remotion';
+import React from 'react';
 
-export const Video = () => {
-  const { scenes, audio } = getInputProps();
+export const CreateVideo: React.FC<{
+  scenes: Array<{
+    src: string;
+    durationInFrames?: number;
+  }>;
+  audio?: string;
+}> = ({ scenes, audio }) => {
+  const { fps } = useVideoConfig();
+  
+  let currentFrame = 0;
 
   return (
     <AbsoluteFill>
-      {scenes.map((s, i) => (
-        <RemotionVideo key={i} src={s.src} />
-      ))}
+      {scenes.map((scene, index) => {
+        const duration = scene.durationInFrames || fps * 5;
+        const from = currentFrame;
+        currentFrame += duration;
 
-      {audio?.src && <Audio src={audio.src} />}
+        return (
+          <Sequence key={index} from={from} durationInFrames={duration}>
+            <AbsoluteFill>
+              <Video
+                src={scene.src}
+                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                onError={(e) => {
+                  console.error(`Error loading video ${scene.src}:`, e);
+                }}
+              />
+            </AbsoluteFill>
+          </Sequence>
+        );
+      })}
+      
+      {audio && <Audio src={audio} />}
     </AbsoluteFill>
   );
 };
