@@ -1,6 +1,6 @@
 FROM node:20-bullseye
 
-# System deps
+# Install system deps
 RUN apt-get update && apt-get install -y \
   ffmpeg \
   chromium \
@@ -25,21 +25,23 @@ RUN apt-get update && apt-get install -y \
   libx11-xcb1 \
   && rm -rf /var/lib/apt/lists/*
 
+# Puppeteer / Remotion settings
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV REMOTION_BROWSER=chromium
 
 WORKDIR /app
 
+# Copy package files
+COPY package.json ./
+
 # Install deps
-COPY package.json package-lock.json ./
 RUN npm install
 
-# Install Remotion CLI
+# Install Remotion CLI globally
 RUN npm install -g remotion
 
+# Copy rest
 COPY . .
-
-RUN mkdir -p /app/videos
 
 EXPOSE 8080
 CMD ["node", "server.js"]
