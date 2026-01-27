@@ -98,21 +98,27 @@ app.post("/remotion-render", async (req, res) => {
         }));
 
         /* 4) Render Video */
-        const video = path.join(dir, "video.mp4");
+const video = path.join(dir, "video.mp4");
 
-        const cmd = [
-          "npx remotion render",
-          "remotion/index.ts", // Matches your file structure
-          "Video",
-          `"${video}"`,
-          `--props="${propsPath}"`,
-          "--codec=h264",
-          "--browser-executable=/usr/bin/chromium",
-          '--chromium-flags="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --single-process --no-zygote"',
-          "--log=verbose"
-        ].join(" ");
+// Use direct binary path instead of npx
+const remotionBinary = "./node_modules/.bin/remotion"; 
 
-        await run(cmd);
+const cmd = [
+  remotionBinary,
+  "render",
+  "remotion/index.ts",
+  "Video",
+  `"${video}"`,
+  `--props="${propsPath}"`,
+  "--codec=h264",
+  "--browser-executable=/usr/bin/chromium",
+  // Optimized flags for Docker environments
+  '--chromium-flags="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --single-process --no-zygote"',
+  "--log=verbose",
+  "--concurrency=1" // Prevents memory crashes on smaller servers
+].join(" ");
+
+await run(cmd);
 
         /* 5) Final Mux with Audio */
         const final = path.join(WORK, `${jobId}.mp4`);
