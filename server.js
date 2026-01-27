@@ -77,7 +77,11 @@ app.post("/remotion-render", async (req, res) => {
       const outVideo = path.join(jobDir, "video.mp4");
 
       await run(
-        `npx remotion render remotion/index.ts Video "${outVideo}" --props="${propsPath}" --codec=h264`
+      npx remotion render remotion/index.ts Video "${outVideo}" \
+--props="${propsPath}" \
+--codec=h264 \
+--browser-executable=/usr/bin/chromium \
+--chromium-flags="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage"
       );
 
       /* 4. Mux audio */
