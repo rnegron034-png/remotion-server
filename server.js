@@ -24,99 +24,155 @@ app.use(express.json({ limit: "200mb" }));
 
 const JOBS = {};
 let active = 0;
-const MAX = 1;
+const MAX = 1; // Safe for limited containers
 
-function run(cmd) {
+function run(cmd, description = "") {
   return new Promise((resolve, reject) => {
-    console.log("\nRUNNING:", cmd);
+    console.log(`\n[${description || "EXEC"}] ${cmd}`);
     const p = exec(cmd, {
       maxBuffer: 1024 * 1024 * 500,
       env: process.env,
+      timeout: 1800000, // 30 min timeout per command
     });
-
-    p.stdout.on("data", d => console.log(d.toString()));
-    p.stderr.on("data", d => console.error(d.toString()));
-
+    let stdout = "";
+    let stderr = "";
+    p.stdout.on("data", d => {
+      const text = d.toString();
+      stdout += text;
+      console.log(text);
+    });
+    p.stderr.on("data", d => {
+      const text = d.toString();
+      stderr += text;
+      console.warn(text);
+    });
     p.on("exit", code => {
-      if (code === 0) resolve();
-      else reject(new Error("Process exited with code: " + code));
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(`Exit code ${code}${stderr ? `: ${stderr.trim()}` : ""}`));
     });
+    p.on("error", err => reject(err));
   });
 }
 
 async function download(url, out) {
-  await run(`curl -L --fail --silent --show-error "${url}" -o "${out}"`);
+  await run(`curl -L --max-time 180 --fail --silent --show-error -A "Mozilla/5.0" "${url}" -o "${out}"`, "Download");
+  const stat = await fs.stat(out);
+  if (stat.size === 0) throw new Error("Downloaded file empty");
 }
 
 app.post("/remotion-render", async (req, res) => {
   try {
-    if (active >= MAX) return res.status(503).json({ error: "Server busy" });
+    if (active >= MAX) return res.status(503).json({ error: "Server busy – only 1 job at a time" });
 
-    const { scenes, audio } = req.body;
+    const { scenes, audio, fps = 30 } = req.body;
+
     if (!Array.isArray(scenes) || scenes.length === 0) {
-      return res.status(400).json({ error: "Scenes required" });
+      return res.status(400).json({ error: "scenes array is required and must not be empty" });
+    }
+
+    // Basic validation
+    for (const s of scenes) {
+      if (typeof s.src !== "string" || !s.src.startsWith("http")) {
+        return res.status(400).json({ error: "Invalid scene src URL" });
+      }
+      if (typeof s.start !== "number" || typeof s.duration !== "number" || s.duration <= 0) {
+        return res.status(400).json({ error: "Invalid start/duration in scene" });
+      }
+      if (!["video", "image"].includes(s.type)) {
+        return res.status(400).json({ error: "Scene type must be 'video' or 'image'" });
+      }
+    }
+
+    if (audio && (typeof audio.src !== "string" || !audio.src.startsWith("http"))) {
+      return res.status(400).json({ error: "Invalid audio src URL" });
     }
 
     const jobId = uuidv4();
     const dir = path.join(WORK, jobId);
     await fs.mkdir(dir, { recursive: true });
 
-    JOBS[jobId] = { status: "rendering", progress: 1 };
-    res.json({ jobId });
+    JOBS[jobId] = { status: "processing", progress: 5, message: "Preparing assets" };
+    res.json({ jobId, status: "processing" });
 
     (async () => {
       active++;
       try {
+        // Calculate total duration for --frames
+        let totalDuration = 0;
+        for (const s of scenes) {
+          const end = s.start + s.duration;
+          if (end > totalDuration) totalDuration = end;
+        }
+        const totalFrames = Math.ceil(totalDuration * fps);
+
+        // Download all assets
+        const processedScenes = [];
         for (let i = 0; i < scenes.length; i++) {
-          const file = path.join(dir, `scene_${i}.mp4`);
-          await download(scenes[i].src, file);
-          scenes[i].local = file;
+          const s = scenes[i];
+          const ext = s.type === "video" ? ".mp4" : ".jpg";
+          const local = path.join(dir, `asset_${i}${ext}`);
+          await download(s.src, local);
+          processedScenes.push({ ...s, local });
+          JOBS[jobId].progress = 10 + Math.round(40 * (i + 1) / scenes.length);
         }
 
+        let audioLocal = null;
+        let audioTrim = audio?.trim;
         if (audio?.src) {
-          const a = path.join(dir, "audio.mp3");
-          await download(audio.src, a);
-          audio.local = a;
+          audioLocal = path.join(dir, "audio.mp3");
+          await download(audio.src, audioLocal);
+          JOBS[jobId].progress = 55;
         }
 
+        // Write props
         const propsPath = path.join(dir, "props.json");
         await fs.writeFile(propsPath, JSON.stringify({
-          scenes: scenes.map(s => ({ src: s.local })),
-          audio: audio ? { src: audio.local } : null
+          scenes: processedScenes,
+          audio: audioLocal ? { local: audioLocal, trim: audioTrim } : null,
+          fps,
         }));
 
-        const video = path.join(dir, "video.mp4");
+        JOBS[jobId].progress = 60;
+        JOBS[jobId].message = "Rendering with Remotion";
 
-        // STABILITY FIX: Use optimized flags and concurrency limit
+        // Render command – high quality, safe flags
+        const outputVideo = path.join(WORK, `${jobId}.mp4`);
         const cmd = [
           "npx remotion render",
-          "remotion/index.ts",
-          "Video",
-          `"${video}"`,
+          "remotion/index.ts", // ← adjust if your entry file is different (e.g. video/index.ts)
+          "Video",              // ← composition ID
+          `"${outputVideo}"`,
           `--props="${propsPath}"`,
           "--codec=h264",
-          "--concurrency=1", // Prevents overloading the CPU/RAM
-          "--browser-executable=/usr/bin/chromium",
-          '--chromium-flags="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --no-zygote --headless=new"',
+          "--crf=18",               // excellent quality
+          "--pixel-format=yuv420p",
+          "--concurrency=1",        // prevent CPU overload
+          `--frames=0-${totalFrames - 1}`,
           "--log=verbose"
         ].join(" ");
 
-        await run(cmd);
+        await run(cmd, "Remotion render");
 
-        const final = path.join(WORK, `${jobId}.mp4`);
-        if (audio?.local) {
-          await run(`ffmpeg -y -i "${video}" -i "${audio.local}" -map 0:v -map 1:a -c:v copy -c:a aac -shortest "${final}"`);
-        } else {
-          await fs.rename(video, final);
-        }
+        JOBS[jobId] = {
+          status: "done",
+          file: outputVideo,
+          fileSize: (await fs.stat(outputVideo)).size,
+          progress: 100,
+          completedAt: new Date().toISOString(),
+        };
 
-        JOBS[jobId] = { status: "done", file: final };
+        console.log(`\nSUCCESS: Job ${jobId} completed`);
+
       } catch (e) {
-        console.error("RENDER FAILED:", e);
-        JOBS[jobId] = { status: "failed", error: e.message };
+        console.error("\nRENDER FAILED:", e);
+        JOBS[jobId] = {
+          status: "failed",
+          error: e.message || "Unknown rendering error",
+          failedAt: new Date().toISOString(),
+        };
       } finally {
         active--;
-        // Clean up temporary local files to save disk space
+        // Always clean temporary assets (keep only final video)
         await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
       }
     })();
@@ -125,11 +181,21 @@ app.post("/remotion-render", async (req, res) => {
   }
 });
 
-app.get("/status/:id", (req, res) => res.json(JOBS[req.params.id] || { status: "unknown" }));
-app.get("/download/:id", (req, res) => {
-  const j = JOBS[req.params.id];
-  if (!j || j.status !== "done") return res.status(404).json({ error: "Not ready" });
-  res.download(j.file);
+app.get("/status/:id", (req, res) => {
+  const job = JOBS[req.params.id];
+  if (!job) return res.json({ status: "unknown" });
+  const { file, ...safe } = job;
+  res.json(safe);
 });
 
-app.listen(PORT, () => console.log("SERVER LIVE"));
+app.get("/download/:id", (req, res) => {
+  const job = JOBS[req.params.id];
+  if (!job || job.status !== "done") return res.status(404).json({ error: "Not ready or not found" });
+  if (!fsSync.existsSync(job.file)) {
+    delete JOBS[req.params.id];
+    return res.status(410).json({ error: "Video expired" });
+  }
+  res.download(job.file, `video_${req.params.id}.mp4`);
+});
+
+app.listen(PORT, () => console.log(`\nRemotion Render Server LIVE on port ${PORT}`));
