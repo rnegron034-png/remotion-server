@@ -1,6 +1,7 @@
-import { AbsoluteFill, Video, Audio, Sequence, useVideoConfig } from 'remotion';
+import { AbsoluteFill, OffthreadVideo, Audio, Sequence, useVideoConfig } from 'remotion';
 import React from 'react';
 
+// ADD "export" HERE ↓
 export const CreateVideo: React.FC<{
   scenes: Array<{
     src: string;
@@ -22,12 +23,9 @@ export const CreateVideo: React.FC<{
         return (
           <Sequence key={index} from={from} durationInFrames={duration}>
             <AbsoluteFill>
-              <Video
+              <OffthreadVideo
                 src={scene.src}
                 style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                onError={(e) => {
-                  console.error(`Error loading video ${scene.src}:`, e);
-                }}
               />
             </AbsoluteFill>
           </Sequence>
