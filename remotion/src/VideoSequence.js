@@ -1,14 +1,10 @@
 import React from 'react';
-import { Series, Video, Audio, useVideoConfig } from 'remotion';
+import { Series, Video, Audio } from 'remotion';
 
 export const VideoSequence = (props) => {
-  const { fps } = useVideoConfig();
-
-  // CRITICAL FIX: Extract props with default values
   const scenes = props?.scenes || [];
   const audio = props?.audio || null;
 
-  // Early return if no scenes
   if (scenes.length === 0) {
     return null;
   }
@@ -17,9 +13,7 @@ export const VideoSequence = (props) => {
     <>
       <Series>
         {scenes.map((scene, index) => {
-          // Guard against invalid scene objects
           if (!scene || !scene.src) {
-            console.warn(`Scene ${index} is missing src`);
             return null;
           }
 
