@@ -2,39 +2,45 @@ import React from 'react';
 import { Series, Video, Audio } from 'remotion';
 
 export const VideoSequence = ({ scenes = [], audio = null }) => {
-  // Log received props for debugging
-  console.log('VideoSequence scenes:', scenes);
-  console.log('VideoSequence audio:', audio);
+  console.log('VideoSequence received scenes:', scenes);
+  console.log('VideoSequence received audio:', audio);
 
-  // Validate scenes
-  if (!Array.isArray(scenes)) {
-    console.error('scenes is not an array:', typeof scenes);
-    return null;
-  }
-
-  if (scenes.length === 0) {
-    console.warn('No scenes provided');
-    return null;
+  if (!Array.isArray(scenes) || scenes.length === 0) {
+    console.error('No valid scenes provided');
+    return (
+      <div style={{
+        width: '100%',
+        height: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#000',
+        color: '#fff',
+        fontSize: 48
+      }}>
+        No scenes provided
+      </div>
+    );
   }
 
   return (
     <>
       <Series>
         {scenes.map((scene, index) => {
-          if (!scene || typeof scene !== 'object' || !scene.src) {
-            console.warn(`Scene ${index} invalid:`, scene);
+          if (!scene || !scene.src) {
+            console.warn(`Scene ${index} missing src`);
             return null;
           }
 
           return (
             <Series.Sequence key={index} durationInFrames={150}>
-              <Video src={scene.src} startFrom={0} />
+              <Video src={scene.src} />
             </Series.Sequence>
           );
         })}
       </Series>
 
-      {audio && typeof audio === 'object' && audio.src && (
+      {audio && audio.src && (
         <Audio src={audio.src} />
       )}
     </>
