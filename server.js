@@ -17,6 +17,7 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 const WORK = path.join(__dirname, "videos");
 
+// Ensure videos directory exists
 if (!fsSync.existsSync(WORK)) fsSync.mkdirSync(WORK, { recursive: true });
 
 app.use(cors());
@@ -90,29 +91,31 @@ app.post("/remotion-render", async (req, res) => {
         }
 
         /* 3) Write props */
+        // FIX: Variable name is 'propsPath', not 'props'
         const propsPath = path.join(dir, "props.json");
-       await fs.writeFile(props, JSON.stringify({
-  scenes: scenes.map(s => ({ src: s.local })),
-  audio: audio ? { src: audio.local } : null
-}));
+        await fs.writeFile(propsPath, JSON.stringify({
+          scenes: scenes.map(s => ({ src: s.local })),
+          audio: audio ? { src: audio.local } : null
+        }));
 
 
         /* 4) Render */
         const video = path.join(dir, "video.mp4");
 
-      const cmd = [
-  "npx remotion render",
-  "remotion/index.ts",
-  "Video",
-  `"${video}"`,
-  `--props="${props}"`,
-  "--codec=h264",
-  "--browser-executable=/usr/bin/chromium",
-  '--chromium-flags="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --single-process --no-zygote"',
-  "--log=verbose"
-].join(" ");
+        // FIX: Used 'propsPath' inside the command
+        const cmd = [
+          "npx remotion render",
+          "remotion/index.ts",
+          "Video",
+          `"${video}"`,
+          `--props="${propsPath}"`,
+          "--codec=h264",
+          "--browser-executable=/usr/bin/chromium",
+          '--chromium-flags="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --single-process --no-zygote"',
+          "--log=verbose"
+        ].join(" ");
 
-await run(cmd);
+        await run(cmd);
 
 
         /* 5) Mux audio */
@@ -133,6 +136,8 @@ await run(cmd);
         JOBS[jobId] = { status: "failed", error: e.message };
       } finally {
         active--;
+        // Optional: Clean up temporary folder 'dir' here to save space
+        // await fs.rm(dir, { recursive: true, force: true }).catch(console.error);
       }
     })();
   } catch (err) {
