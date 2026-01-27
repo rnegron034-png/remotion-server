@@ -15,34 +15,3 @@
     "react-dom": "^18.2.0"
   }
 }
-```
-
-**Key change:** `"type": "module"` is now explicit.
-
----
-
-## **What Changed**
-
-| CommonJS (Old) | ES Modules (New) |
-|----------------|------------------|
-| `const express = require('express')` | `import express from 'express'` |
-| `const { exec } = require('child_process')` | `import { exec } from 'child_process'` |
-| `__dirname` available globally | `const __dirname = path.dirname(fileURLToPath(import.meta.url))` |
-
----
-
-## **Deploy Steps**
-
-1. **Replace `server.js`** with the ES module version above
-2. **Update `package.json`** to include `"type": "module"`
-3. **Push to GitHub**
-4. **Railway will auto-redeploy**
-
----
-
-## **Verification**
-
-After deployment, check Railway logs for:
-```
-Server running on port 3000
-Max concurrent renders: 1
