@@ -31,6 +31,8 @@ ENV REMOTION_BROWSER=chromium
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install
+RUN npm install -g remotion
+
 COPY . .
 
 EXPOSE 8080
