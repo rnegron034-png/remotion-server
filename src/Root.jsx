@@ -1,16 +1,16 @@
 import React from 'react';
 import { Composition } from 'remotion';
-import { Video } from './Video';
+import Video from './Video.jsx';
 
-export const Root = () => {
+export default function Root() {
   return (
     <Composition
       id="VideoComposition"
       component={Video}
       fps={30}
-      width={720}     // 🚨 DO NOT CHANGE (Railway-safe)
-      height={1280}   // 🚨 DO NOT CHANGE (Railway-safe)
-      durationInFrames={1} // overridden per scene
+      width={720}
+      height={1280}
+      durationInFrames={1}
     />
   );
-};
+}
