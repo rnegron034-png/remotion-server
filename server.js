@@ -13,25 +13,22 @@ const __dirname = path.dirname(__filename);
 const execFilePromise = promisify(execFile);
 const app = express();
 
-// Job status storage (in-memory)
+// Job status storage
 const jobStatuses = new Map();
 
-// ✅ SYNC ONLY - No async before listen
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// CORS (if needed for web access)
+// CORS
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
-  }
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
 
-// Health check for Railway
+// Health check
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
@@ -57,7 +54,6 @@ app.get('/', (req, res) => {
   });
 });
 
-// List all jobs (for debugging)
 app.get('/jobs', (req, res) => {
   const jobs = Array.from(jobStatuses.entries()).map(([jobId, status]) => ({
     jobId,
@@ -71,151 +67,89 @@ app.post('/remotion-render', async (req, res) => {
   const jobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   
   try {
-    // ✅ Input validation
-    const { scenes, subtitles = [], audio = null } = req.body;
+    const { scenes, subtitles = [] } = req.body;
     
     if (!Array.isArray(scenes) || scenes.length === 0) {
       return res.status(400).json({ 
         error: 'scenes must be non-empty array',
-        example: { 
-          scenes: [{ 
-            src: 'https://example.com/video.mp4', 
-            durationInFrames: 300 
-          }],
-          subtitles: [],
-          audio: null
-        }
+        example: { scenes: [{ src: 'https://...', durationInFrames: 300 }] }
       });
     }
     
     if (scenes.length > 10) {
-      return res.status(400).json({ 
-        error: 'Maximum 10 scenes allowed per job' 
-      });
+      return res.status(400).json({ error: 'Maximum 10 scenes allowed' });
     }
     
-    // Validate each scene
     for (let i = 0; i < scenes.length; i++) {
       const scene = scenes[i];
-      
       if (!scene.src && !scene.url) {
-        return res.status(400).json({ 
-          error: `Scene ${i} missing src/url property`,
-          scene: scene
-        });
+        return res.status(400).json({ error: `Scene ${i} missing src/url` });
       }
-      
       if (!scene.durationInFrames) {
-        return res.status(400).json({ 
-          error: `Scene ${i} missing durationInFrames`,
-          hint: 'durationInFrames = seconds * 30 (for 30fps)',
-          scene: scene
-        });
-      }
-      
-      if (typeof scene.durationInFrames !== 'number' || scene.durationInFrames <= 0) {
-        return res.status(400).json({ 
-          error: `Scene ${i} durationInFrames must be positive number`,
-          received: scene.durationInFrames
-        });
+        return res.status(400).json({ error: `Scene ${i} missing durationInFrames` });
       }
     }
     
-    // ✅ Return jobId immediately (202 Accepted)
     res.status(202).json({ 
       jobId, 
       status: 'accepted',
-      message: 'Job queued for processing',
       sceneCount: scenes.length,
       checkStatus: `/status/${jobId}`,
       download: `/download/${jobId}`
     });
     
-    // ✅ Process async (don't block response)
-    processRenderJob(jobId, scenes, subtitles, audio).catch(err => {
+    processRenderJob(jobId, scenes, subtitles).catch(err => {
       console.error(`[${jobId}] FAILED:`, err.message);
-      console.error(err.stack);
     });
     
   } catch (error) {
     console.error('Endpoint error:', error);
-    return res.status(500).json({ 
-      error: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
+    return res.status(500).json({ error: error.message });
   }
 });
 
-// Status check endpoint
+// Status endpoint
 app.get('/status/:jobId', (req, res) => {
   const { jobId } = req.params;
-  
   const status = jobStatuses.get(jobId);
   
   if (!status) {
-    return res.status(404).json({ 
-      error: 'Job not found',
-      jobId,
-      hint: 'Job may have expired or never existed'
-    });
+    return res.status(404).json({ error: 'Job not found', jobId });
   }
   
-  res.json({
-    jobId,
-    ...status,
-    endpoints: {
-      status: `/status/${jobId}`,
-      download: status.status === 'completed' ? `/download/${jobId}` : null
-    }
-  });
+  res.json({ jobId, ...status });
 });
 
-// Download completed video
+// Download endpoint
 app.get('/download/:jobId', (req, res) => {
   const { jobId } = req.params;
-  
   const status = jobStatuses.get(jobId);
   
   if (!status) {
-    return res.status(404).json({ 
-      error: 'Job not found',
-      jobId 
-    });
+    return res.status(404).json({ error: 'Job not found' });
   }
   
   if (status.status !== 'completed') {
     return res.status(400).json({ 
-      error: 'Job not completed yet',
-      currentStatus: status.status,
-      progress: status.progress,
-      checkStatus: `/status/${jobId}`
+      error: 'Job not completed', 
+      currentStatus: status.status 
     });
   }
   
   if (!status.outputPath || !fs.existsSync(status.outputPath)) {
-    return res.status(404).json({ 
-      error: 'Output file not found or already deleted',
-      hint: 'Files are automatically deleted after 1 hour'
-    });
+    return res.status(404).json({ error: 'Output file not found' });
   }
   
-  // Stream the file
-  const filename = `render_${jobId}.mp4`;
-  res.download(status.outputPath, filename, (err) => {
-    if (err) {
-      console.error(`[${jobId}] Download error:`, err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Download failed' });
-      }
+  res.download(status.outputPath, `render_${jobId}.mp4`, (err) => {
+    if (err && !res.headersSent) {
+      res.status(500).json({ error: 'Download failed' });
     }
   });
 });
 
-// ✅ Async render logic (called after response sent)
-async function processRenderJob(jobId, scenes, subtitles, audio) {
+async function processRenderJob(jobId, scenes, subtitles) {
   const startTime = Date.now();
   
-  // Initialize status
   jobStatuses.set(jobId, {
     status: 'processing',
     progress: 0,
@@ -233,77 +167,68 @@ async function processRenderJob(jobId, scenes, subtitles, audio) {
   const tempDir = '/tmp';
   
   try {
-    // Step 1: Bundle Remotion (only once)
-    jobStatuses.set(jobId, { 
-      ...jobStatuses.get(jobId), 
-      progress: 0.05, 
-      status: 'bundling' 
-    });
+    jobStatuses.set(jobId, { ...jobStatuses.get(jobId), progress: 0.05, status: 'bundling' });
     
     console.log(`[${jobId}] Bundling Remotion...`);
+    
+    // ✅ FIXED: Correct entry point path
+    const entryPoint = path.join(__dirname, 'src', 'index.jsx');
+    console.log(`[${jobId}] Entry point: ${entryPoint}`);
+    
+    // Check if file exists
+    if (!fs.existsSync(entryPoint)) {
+      throw new Error(`Entry point not found: ${entryPoint}`);
+    }
+    
     bundleLocation = await bundle({
-      entryPoint: path.join(__dirname, 'src/index.jsx'),
+      entryPoint: entryPoint,
       webpackOverride: (config) => config,
     });
-    console.log(`[${jobId}] Bundle created at ${bundleLocation}`);
     
-    jobStatuses.set(jobId, { 
-      ...jobStatuses.get(jobId), 
-      progress: 0.1, 
-      status: 'rendering' 
-    });
+    console.log(`[${jobId}] Bundle created: ${bundleLocation}`);
     
-    // Step 2: Render each scene separately
+    jobStatuses.set(jobId, { ...jobStatuses.get(jobId), progress: 0.1, status: 'rendering' });
+    
+    // Render each scene
     for (let i = 0; i < scenes.length; i++) {
       const scene = scenes[i];
       const sceneOutputPath = path.join(tempDir, `${jobId}_scene_${i}.mp4`);
       
-      // Calculate progress (10% for bundle, 80% for rendering, 10% for concat)
       const progressPercent = 0.1 + ((i / scenes.length) * 0.8);
       
       jobStatuses.set(jobId, { 
         ...jobStatuses.get(jobId), 
         progress: progressPercent,
         currentScene: i + 1,
-        status: 'rendering',
         message: `Rendering scene ${i + 1}/${scenes.length}`
       });
       
       console.log(`[${jobId}] Rendering scene ${i + 1}/${scenes.length}...`);
       
-      // ✅ Get composition
       const composition = await selectComposition({
         serveUrl: bundleLocation,
-        id: 'VideoComposition', // Must match your composition ID
-        inputProps: {
-          scene,
-          subtitles: subtitles,
-        },
+        id: 'VideoComposition',
+        inputProps: { scene, subtitles },
       });
       
-      // ✅ Render with memory constraints
       await renderMedia({
         composition,
         serveUrl: bundleLocation,
         codec: 'h264',
         outputLocation: sceneOutputPath,
-        inputProps: {
-          scene,
-          subtitles,
-        },
+        inputProps: { scene, subtitles },
         
-        // 🔒 CRITICAL: Chromium config
         chromiumOptions: {
-          executablePath: '/usr/bin/chromium', // Force system Chromium
+          executablePath: '/usr/bin/chromium',
           disableWebSecurity: false,
           ignoreCertificateErrors: false,
-          gl: 'swiftshader', // Software rendering
+          gl: 'swiftshader',
           args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage', // Use /tmp instead of /dev/shm
+            '--disable-dev-shm-usage',
             '--disable-gpu',
-            '--single-process', // Critical for low RAM
+            '--single-process',
             '--no-zygote',
             '--disable-software-rasterizer',
             '--disable-extensions',
@@ -318,53 +243,41 @@ async function processRenderJob(jobId, scenes, subtitles, audio) {
           ],
         },
         
-        // 🔒 CRITICAL: FFmpeg config
-        concurrency: 1, // One frame at a time
+        concurrency: 1,
         frameRange: [0, scene.durationInFrames - 1],
-        
-        codec: 'h264',
         videoCodec: 'libx264',
         audioCodec: 'aac',
         pixelFormat: 'yuv420p',
         
-        // Custom FFmpeg flags
-        ffmpegOverride: ({ args }) => {
-          return [
-            '-threads', '1', // Single thread to avoid OOM
-            '-preset', 'ultrafast', // Fast encoding
-            '-crf', '28', // Balance quality/size
-            ...args,
-          ];
-        },
+        ffmpegOverride: ({ args }) => [
+          '-threads', '1',
+          '-preset', 'ultrafast',
+          '-crf', '28',
+          ...args,
+        ],
         
         onProgress: ({ progress }) => {
-          // Update sub-progress within current scene
           const sceneProgress = progressPercent + (progress * 0.8 / scenes.length);
-          jobStatuses.set(jobId, {
-            ...jobStatuses.get(jobId),
-            progress: sceneProgress
-          });
+          jobStatuses.set(jobId, { ...jobStatuses.get(jobId), progress: sceneProgress });
         },
       });
       
       scenePaths.push(sceneOutputPath);
-      console.log(`[${jobId}] Scene ${i + 1} complete: ${sceneOutputPath}`);
+      console.log(`[${jobId}] Scene ${i + 1} complete`);
     }
     
-    // Step 3: Concatenate scenes
+    // Concatenate
     jobStatuses.set(jobId, { 
       ...jobStatuses.get(jobId), 
       progress: 0.95, 
-      status: 'concatenating',
-      message: 'Merging scenes into final video'
+      status: 'concatenating' 
     });
     
     const finalOutputPath = path.join(tempDir, `${jobId}_final.mp4`);
-    console.log(`[${jobId}] Concatenating ${scenePaths.length} scenes...`);
+    console.log(`[${jobId}] Concatenating scenes...`);
     
     await concatenateScenes(scenePaths, finalOutputPath);
     
-    // Step 4: Success
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
     const fileSize = fs.statSync(finalOutputPath).size;
     const fileSizeMB = (fileSize / (1024 * 1024)).toFixed(2);
@@ -377,28 +290,21 @@ async function processRenderJob(jobId, scenes, subtitles, audio) {
       duration: `${duration}s`,
       fileSize: `${fileSizeMB} MB`,
       completedAt: Date.now(),
-      message: 'Render complete'
     });
     
-    console.log(`[${jobId}] ✅ COMPLETE in ${duration}s (${fileSizeMB} MB): ${finalOutputPath}`);
+    console.log(`[${jobId}] ✅ COMPLETE in ${duration}s (${fileSizeMB} MB)`);
     
-    // Cleanup temp scene files (keep final for download)
+    // Cleanup temp files
     setTimeout(() => {
       scenePaths.forEach(p => {
-        try { 
-          fs.unlinkSync(p); 
-          console.log(`[${jobId}] Cleaned up temp file: ${p}`);
-        } catch (e) {
-          console.error(`[${jobId}] Failed to cleanup ${p}:`, e.message);
-        }
+        try { fs.unlinkSync(p); } catch (e) {}
       });
-    }, 10000); // Clean after 10 seconds
+    }, 10000);
     
   } catch (error) {
     console.error(`[${jobId}] ❌ ERROR:`, error.message);
     console.error(error.stack);
     
-    // Update status with error
     jobStatuses.set(jobId, {
       ...jobStatuses.get(jobId),
       status: 'failed',
@@ -406,148 +312,57 @@ async function processRenderJob(jobId, scenes, subtitles, audio) {
       errorDetails: error.stack,
       failedAt: Date.now()
     });
-    
-    throw error;
   }
 }
 
-// ✅ FFmpeg concat with stream copy (no re-encode)
 async function concatenateScenes(scenePaths, outputPath) {
   const concatFilePath = '/tmp/concat_list.txt';
   
   try {
-    // Create concat file
-    const concatContent = scenePaths
-      .map(p => `file '${p}'`)
-      .join('\n');
-    
+    const concatContent = scenePaths.map(p => `file '${p}'`).join('\n');
     fs.writeFileSync(concatFilePath, concatContent);
     
-    console.log('FFmpeg concat file created:', concatFilePath);
-    console.log('Concat content:', concatContent);
-    
-    // Run FFmpeg concat
-    const { stdout, stderr } = await execFilePromise('ffmpeg', [
+    await execFilePromise('ffmpeg', [
       '-f', 'concat',
       '-safe', '0',
       '-i', concatFilePath,
-      '-c', 'copy', // 🔒 CRITICAL: Stream copy only
+      '-c', 'copy',
       '-threads', '1',
       '-y',
       outputPath,
     ]);
     
-    console.log('FFmpeg concat complete:', outputPath);
-    if (stderr) console.log('FFmpeg stderr:', stderr);
-    
+    console.log('FFmpeg concat complete');
     return outputPath;
     
-  } catch (error) {
-    console.error('FFmpeg concat error:', error);
-    throw new Error(`Concatenation failed: ${error.message}`);
   } finally {
-    // Cleanup concat file
-    try { 
-      fs.unlinkSync(concatFilePath); 
-    } catch (e) {
-      console.error('Failed to cleanup concat file:', e.message);
-    }
+    try { fs.unlinkSync(concatFilePath); } catch (e) {}
   }
 }
 
-// ✅ Automatic cleanup of old completed jobs
+// Cleanup old jobs
 setInterval(() => {
   const now = Date.now();
-  const maxAge = 3600000; // 1 hour
-  
   for (const [jobId, status] of jobStatuses.entries()) {
     const age = now - status.startTime;
-    
-    // Delete completed jobs older than 1 hour
-    if (status.status === 'completed' && age > maxAge) {
-      console.log(`[${jobId}] Cleaning up old job (${(age/60000).toFixed(0)} min old)`);
-      
-      // Delete output file
+    if (status.status === 'completed' && age > 3600000) {
       if (status.outputPath) {
-        try { 
-          fs.unlinkSync(status.outputPath);
-          console.log(`[${jobId}] Deleted output file`);
-        } catch (e) {
-          console.error(`[${jobId}] Failed to delete output:`, e.message);
-        }
+        try { fs.unlinkSync(status.outputPath); } catch (e) {}
       }
-      
-      // Remove from memory
-      jobStatuses.delete(jobId);
-    }
-    
-    // Delete failed jobs older than 10 minutes
-    if (status.status === 'failed' && age > 600000) {
-      console.log(`[${jobId}] Removing old failed job`);
       jobStatuses.delete(jobId);
     }
   }
-}, 600000); // Run every 10 minutes
+}, 600000);
 
-// ✅ Start server synchronously
 const PORT = process.env.PORT || 3000;
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log('═══════════════════════════════════════════════════');
+app.listen(PORT, '0.0.0.0', () => {
+  console.log('═══════════════════════════════════════');
   console.log('✅ Remotion Render Server READY');
-  console.log('═══════════════════════════════════════════════════');
+  console.log('═══════════════════════════════════════');
   console.log(`Port: ${PORT}`);
   console.log(`Health: http://localhost:${PORT}/health`);
-  console.log(`Render: POST http://localhost:${PORT}/remotion-render`);
-  console.log(`Status: GET http://localhost:${PORT}/status/:jobId`);
-  console.log(`Download: GET http://localhost:${PORT}/download/:jobId`);
-  console.log('═══════════════════════════════════════════════════');
-  console.log(`Node: ${process.version}`);
-  console.log(`Memory: ${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2)} MB`);
-  console.log('═══════════════════════════════════════════════════');
+  console.log('═══════════════════════════════════════');
 });
 
-// Graceful shutdown
-const shutdown = (signal) => {
-  console.log(`\n${signal} received, shutting down gracefully...`);
-  
-  server.close(() => {
-    console.log('HTTP server closed');
-    
-    // Clean up all temp files
-    for (const [jobId, status] of jobStatuses.entries()) {
-      if (status.outputPath && fs.existsSync(status.outputPath)) {
-        try {
-          fs.unlinkSync(status.outputPath);
-          console.log(`Cleaned up ${jobId}`);
-        } catch (e) {
-          console.error(`Failed to cleanup ${jobId}:`, e.message);
-        }
-      }
-    }
-    
-    console.log('Cleanup complete. Exiting.');
-    process.exit(0);
-  });
-  
-  // Force exit after 30 seconds
-  setTimeout(() => {
-    console.error('Forced shutdown after timeout');
-    process.exit(1);
-  }, 30000);
-};
-
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
-
-// Handle uncaught errors
-process.on('uncaughtException', (error) => {
-  console.error('Uncaught Exception:', error);
-  // Don't exit - log and continue
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  // Don't exit - log and continue
-});
-
-export default app;
+process.on('SIGTERM', () => process.exit(0));
+process.on('SIGINT', () => process.exit(0));
