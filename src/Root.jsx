@@ -10,7 +10,13 @@ export default function Root() {
       fps={30}
       width={720}
       height={1280}
-      durationInFrames={1}
+      durationInFrames={300} // ← placeholder, will be overridden
+      defaultProps={{
+        scene: {
+          src: '',
+          durationInFrames: 300,
+        },
+      }}
     />
   );
 }
