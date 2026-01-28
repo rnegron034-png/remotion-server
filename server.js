@@ -25,10 +25,9 @@ const app = express();
 const jobStatuses = new Map();
 
 app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 /* ────────────────────────────────────────────── */
-/* CORS + PREFLIGHT                              */
+/* CORS                                          */
 /* ────────────────────────────────────────────── */
 
 app.use((req, res, next) => {
@@ -48,40 +47,19 @@ app.get('/health', (_, res) => {
 });
 
 app.get('/', (_, res) => {
-  res.json({
-    service: 'Remotion Renderer',
-    status: 'ready',
-    activeJobs: jobStatuses.size,
-  });
-});
-
-/* ────────────────────────────────────────────── */
-/* JOB LIST (DEBUG / INTERNAL)                   */
-/* ────────────────────────────────────────────── */
-
-app.get('/jobs', (_, res) => {
-  res.json({
-    total: jobStatuses.size,
-    jobs: Array.from(jobStatuses.entries()).map(([jobId, v]) => ({
-      jobId,
-      status: v.status,
-      progress: Math.round((v.progress || 0) * 100),
-      stage: v.stage,
-      createdAt: v.startTime,
-    })),
-  });
+  res.json({ service: 'Remotion Renderer', status: 'ready' });
 });
 
 /* ────────────────────────────────────────────── */
 /* START RENDER                                  */
 /* ────────────────────────────────────────────── */
 
-app.post('/remotion-render', async (req, res) => {
+app.post('/remotion-render', (req, res) => {
   const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const { scenes, subtitles = [] } = req.body;
 
   if (!Array.isArray(scenes) || scenes.length === 0) {
-    return res.status(400).json({ error: 'scenes must be non-empty array' });
+    return res.status(400).json({ error: 'scenes[] required' });
   }
 
   for (let i = 0; i < scenes.length; i++) {
@@ -100,6 +78,7 @@ app.post('/remotion-render', async (req, res) => {
     currentScene: 0,
     startTime: Date.now(),
     outputPath: null,
+    error: null,
   });
 
   res.status(202).json({
@@ -109,7 +88,7 @@ app.post('/remotion-render', async (req, res) => {
   });
 
   processRenderJob(jobId, scenes, subtitles).catch(err => {
-    console.error(`[${jobId}] fatal error`, err);
+    console.error(`[${jobId}] fatal`, err);
   });
 });
 
@@ -132,7 +111,7 @@ app.get('/status/:jobId', (req, res) => {
       job.status === 'completed'
         ? `/download/${req.params.jobId}`
         : null,
-    error: job.error || null,
+    error: job.error,
   });
 });
 
@@ -143,9 +122,9 @@ app.get('/status/:jobId', (req, res) => {
 app.get('/download/:jobId', (req, res) => {
   const job = jobStatuses.get(req.params.jobId);
   if (!job) return res.status(404).json({ error: 'Job not found' });
-  if (job.status !== 'completed')
+  if (job.status !== 'completed') {
     return res.status(400).json({ error: 'Job not completed' });
-
+  }
   res.download(job.outputPath, `render_${req.params.jobId}.mp4`);
 });
 
@@ -172,9 +151,8 @@ async function processRenderJob(jobId, scenes, subtitles) {
     for (let i = 0; i < scenes.length; i++) {
       job.currentScene = i + 1;
       job.stage = `rendering scene ${i + 1}/${scenes.length}`;
-      job.progress = i / scenes.length;
 
-      const sceneOutput = path.join(tempDir, `${jobId}_scene_${i}.mp4`);
+      const sceneOut = path.join(tempDir, `${jobId}_scene_${i}.mp4`);
 
       const composition = await selectComposition({
         serveUrl: bundleLocation,
@@ -186,7 +164,7 @@ async function processRenderJob(jobId, scenes, subtitles) {
         composition,
         serveUrl: bundleLocation,
         codec: 'h264',
-        outputLocation: sceneOutput,
+        outputLocation: sceneOut,
         inputProps: { scene: scenes[i], subtitles },
 
         concurrency: 1,
@@ -196,7 +174,7 @@ async function processRenderJob(jobId, scenes, subtitles) {
         x264Preset: 'veryfast',
         pixelFormat: 'yuv420p',
 
-        // 🔥 OOM FIX (MANDATORY)
+        // 🔥 OOM FIX
         x264Params: [
           'threads=2',
           'lookahead-threads=1',
@@ -216,20 +194,29 @@ async function processRenderJob(jobId, scenes, subtitles) {
             '--no-zygote',
           ],
         },
+
+        // ✅ PROGRESS FIX (THIS WAS MISSING)
+        onProgress: ({ progress }) => {
+          const base = i / scenes.length;
+          const sceneContribution = progress / scenes.length;
+          job.progress = Math.min(base + sceneContribution, 0.999);
+        },
       });
 
-      scenePaths.push(sceneOutput);
+      scenePaths.push(sceneOut);
     }
 
     /* CONCAT */
     job.stage = 'concatenating';
+
     const concatList = path.join(tempDir, `${jobId}_concat.txt`);
     fs.writeFileSync(
       concatList,
       scenePaths.map(p => `file '${p}'`).join('\n')
     );
 
-    const finalOutput = path.join(tempDir, `${jobId}_final.mp4`);
+    const finalOut = path.join(tempDir, `${jobId}_final.mp4`);
+
     await execFilePromise('ffmpeg', [
       '-y',
       '-f',
@@ -240,15 +227,14 @@ async function processRenderJob(jobId, scenes, subtitles) {
       concatList,
       '-c',
       'copy',
-      finalOutput,
+      finalOut,
     ]);
 
     job.status = 'completed';
     job.stage = 'completed';
     job.progress = 1;
-    job.outputPath = finalOutput;
+    job.outputPath = finalOut;
 
-    /* Cleanup */
     setTimeout(() => {
       scenePaths.forEach(p => fs.unlink(p, () => {}));
       fs.unlink(concatList, () => {});
