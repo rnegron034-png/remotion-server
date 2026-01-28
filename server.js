@@ -9,7 +9,6 @@ import { v4 as uuidv4 } from 'uuid';
 import os from 'os';
 import path from 'path';
 import fs from 'fs/promises';
-import fsSync from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
@@ -40,10 +39,8 @@ app.get('/', (_, res) => {
   res.send('Remotion render service alive');
 });
 
-const PORT = Number(process.env.PORT);
-if (!PORT) {
-  throw new Error('PORT environment variable not set');
-}
+// 🚨 Railway-safe PORT binding
+const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
@@ -88,8 +85,10 @@ app.post('/remotion-render', async (req, res) => {
     startedAt: Date.now(),
   });
 
+  // Respond immediately (n8n-safe)
   res.status(202).json({ jobId });
 
+  // Run async
   runJob(jobId, scenes, subtitles).catch(err => {
     failJob(jobId, err);
   });
@@ -110,6 +109,7 @@ async function runJob(jobId, scenes, subtitles) {
   try {
     /* Bundle Remotion */
     job.status = 'bundling';
+
     const serveUrl = await bundle({
       entryPoint: path.resolve('./src/index.jsx'),
       outDir: path.join(workDir, 'bundle'),
@@ -149,7 +149,7 @@ async function runJob(jobId, scenes, subtitles) {
         crf: 23,
         x264Preset: 'veryfast',
 
-        // 🔥 THE OOM FIX (MANDATORY)
+        // 🔥 FFmpeg OOM FIX (MANDATORY)
         x264Params: [
           'threads=2',
           'lookahead-threads=1',
