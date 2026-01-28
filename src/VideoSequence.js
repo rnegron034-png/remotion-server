@@ -1,28 +1,26 @@
 import React from 'react';
 import {
-  Series,
-  Video,
-  Audio,
   AbsoluteFill,
+  Video,
   useCurrentFrame,
   interpolate,
 } from 'remotion';
 
-const Scene = ({ src, subtitle }) => {
+export const VideoSequence = ({ scenes = [] }) => {
+  const scene = scenes[0];
   const frame = useCurrentFrame();
 
-  // 🔥 first-frame hook
   const opacity = interpolate(frame, [0, 6], [0, 1], {
     extrapolateRight: 'clamp',
   });
-  const scale = interpolate(frame, [0, 10], [1.06, 1], {
+  const scale = interpolate(frame, [0, 10], [1.05, 1], {
     extrapolateRight: 'clamp',
   });
 
   return (
     <AbsoluteFill style={{ backgroundColor: 'black' }}>
       <Video
-        src={src}
+        src={scene.src}
         style={{
           width: '100%',
           height: '100%',
@@ -32,7 +30,7 @@ const Scene = ({ src, subtitle }) => {
         }}
       />
 
-      {subtitle && (
+      {scene.subtitle && (
         <AbsoluteFill
           style={{
             justifyContent: 'flex-end',
@@ -41,7 +39,7 @@ const Scene = ({ src, subtitle }) => {
         >
           <div
             style={{
-              fontSize: 78,
+              fontSize: 76,
               fontWeight: 900,
               color: '#fff',
               textAlign: 'center',
@@ -53,33 +51,10 @@ const Scene = ({ src, subtitle }) => {
               textShadow: '0 4px 14px rgba(0,0,0,0.9)',
             }}
           >
-            {subtitle}
+            {scene.subtitle}
           </div>
         </AbsoluteFill>
       )}
     </AbsoluteFill>
-  );
-};
-
-export const VideoSequence = ({ scenes = [], audio = null }) => {
-  if (!Array.isArray(scenes) || scenes.length === 0) {
-    return null;
-  }
-
-  return (
-    <>
-      <Series>
-        {scenes.map((scene, index) => (
-          <Series.Sequence key={index} durationInFrames={150}>
-            <Scene
-              src={scene.src}
-              subtitle={scene.subtitle}
-            />
-          </Series.Sequence>
-        ))}
-      </Series>
-
-      {audio?.src && <Audio src={audio.src} />}
-    </>
   );
 };
