@@ -95,10 +95,11 @@ async function runJob(jobId, scenes) {
     const out = path.join(tmp, `${jobId}_scene_${i}.mp4`);
 
     const composition = await selectComposition({
-      serveUrl: bundleLocation,
-      id: 'VideoComposition',
-      inputProps: { scene: scenes[i] },
-    });
+  serveUrl: bundleLocation,
+  id: 'VideoComposition',
+  inputProps: { scene: scenes[i] },
+  durationInFrames: scenes[i].durationInFrames, // 🔥 THIS
+});
 
     await renderMedia({
       composition,
