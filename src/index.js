@@ -1,4 +1,4 @@
 import { registerRoot } from 'remotion';
-import { VideoComposition } from './VideoComposition.js';
+import { RemotionRoot } from './Root';
 
-registerRoot(VideoComposition);
+registerRoot(RemotionRoot);
