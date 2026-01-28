@@ -1,26 +1,37 @@
-FROM node:20-bullseye
+FROM node:22-slim
 
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
-  chromium \
-  ffmpeg \
-  fonts-liberation \
-  libnss3 libatk-bridge2.0-0 libcups2 \
-  libdrm2 libxkbcommon0 libxcomposite1 \
-  libxdamage1 libxrandr2 libgbm1 libasound2 \
-  && rm -rf /var/lib/apt/lists/*
-
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-ENV PUPPETEER_SKIP_DOWNLOAD=true
-ENV NODE_OPTIONS="--max-old-space-size=1536"
+    chromium \
+    ffmpeg \
+    fonts-liberation \
+    libnss3 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+# Copy package files
 COPY package*.json ./
-RUN npm install
 
-COPY server.js .
-COPY src ./src
+# Install dependencies
+RUN npm install --production
 
-RUN mkdir -p /app/renders
+# Copy source
+COPY . .
 
+# Expose port
 EXPOSE 3000
+
+# Start server
 CMD ["node", "server.js"]
