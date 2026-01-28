@@ -6,7 +6,16 @@ import {
   interpolate,
 } from 'remotion';
 
-export const VideoSequence = ({ scenes = [] }) => {
+export const VideoSequence = ({ scenes }) => {
+  // 🛡️ HARD GUARD (CRITICAL)
+  if (!Array.isArray(scenes) || scenes.length === 0 || !scenes[0]?.src) {
+    return (
+      <AbsoluteFill style={{ backgroundColor: 'black' }}>
+        {/* empty frame – prevents crash */}
+      </AbsoluteFill>
+    );
+  }
+
   const scene = scenes[0];
   const frame = useCurrentFrame();
 
@@ -21,6 +30,7 @@ export const VideoSequence = ({ scenes = [] }) => {
     <AbsoluteFill style={{ backgroundColor: 'black' }}>
       <Video
         src={scene.src}
+        startFrom={0}
         style={{
           width: '100%',
           height: '100%',
