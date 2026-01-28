@@ -19,10 +19,8 @@ const jobs = new Map();
 
 app.use(express.json({ limit: '20mb' }));
 
-/* ───────── HEALTHCHECK ───────── */
 app.get('/health', (_, res) => res.send('OK'));
 
-/* ───────── START RENDER ───────── */
 app.post('/remotion-render', (req, res) => {
   const { scenes } = req.body;
   if (!Array.isArray(scenes) || scenes.length === 0) {
@@ -30,6 +28,7 @@ app.post('/remotion-render', (req, res) => {
   }
 
   const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
   jobs.set(jobId, {
     status: 'queued',
     stage: 'queued',
@@ -54,7 +53,6 @@ app.post('/remotion-render', (req, res) => {
   });
 });
 
-/* ───────── STATUS ───────── */
 app.get('/status/:jobId', (req, res) => {
   const job = jobs.get(req.params.jobId);
   if (!job) return res.status(404).json({ error: 'not found' });
@@ -63,13 +61,13 @@ app.get('/status/:jobId', (req, res) => {
     jobId: req.params.jobId,
     ...job,
     progress: Math.round(job.progress * 100),
-    downloadUrl: job.status === 'completed'
-      ? `/download/${req.params.jobId}`
-      : null,
+    downloadUrl:
+      job.status === 'completed'
+        ? `/download/${req.params.jobId}`
+        : null,
   });
 });
 
-/* ───────── DOWNLOAD ───────── */
 app.get('/download/:jobId', (req, res) => {
   const job = jobs.get(req.params.jobId);
   if (!job || job.status !== 'completed') {
@@ -78,7 +76,6 @@ app.get('/download/:jobId', (req, res) => {
   res.download(job.output);
 });
 
-/* ───────── JOB RUNNER ───────── */
 async function runJob(jobId, scenes) {
   const job = jobs.get(jobId);
   const tmp = '/tmp';
@@ -133,7 +130,7 @@ async function runJob(jobId, scenes) {
         ],
       },
 
-      everyNthFrame: 2, // 🚨 MEMORY SAVER
+      everyNthFrame: 2,
 
       onProgress: ({ progress }) => {
         job.progress =
@@ -155,10 +152,14 @@ async function runJob(jobId, scenes) {
   const finalOut = path.join(tmp, `${jobId}_final.mp4`);
   await execFileAsync('ffmpeg', [
     '-y',
-    '-f', 'concat',
-    '-safe', '0',
-    '-i', concatFile,
-    '-c', 'copy',
+    '-f',
+    'concat',
+    '-safe',
+    '0',
+    '-i',
+    concatFile,
+    '-c',
+    'copy',
     finalOut,
   ]);
 
@@ -168,7 +169,6 @@ async function runJob(jobId, scenes) {
   job.output = finalOut;
 }
 
-/* ───────── START SERVER ───────── */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () =>
   console.log(`Render server running on ${PORT}`)
