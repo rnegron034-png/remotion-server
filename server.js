@@ -13,13 +13,11 @@ const __dirname = path.dirname(__filename);
 const execFilePromise = promisify(execFile);
 const app = express();
 
-// Job status storage
 const jobStatuses = new Map();
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// CORS
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -28,7 +26,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health check
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
@@ -54,6 +51,27 @@ app.get('/', (req, res) => {
   });
 });
 
+// Debug endpoint - check file system
+app.get('/debug/files', (req, res) => {
+  try {
+    const projectFiles = fs.readdirSync(__dirname);
+    const srcExists = fs.existsSync(path.join(__dirname, 'src'));
+    const srcFiles = srcExists ? fs.readdirSync(path.join(__dirname, 'src')) : [];
+    
+    res.json({
+      cwd: process.cwd(),
+      __dirname,
+      projectFiles,
+      srcExists,
+      srcFiles,
+      entryPoint: path.join(__dirname, 'src', 'index.jsx'),
+      entryExists: fs.existsSync(path.join(__dirname, 'src', 'index.jsx'))
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get('/jobs', (req, res) => {
   const jobs = Array.from(jobStatuses.entries()).map(([jobId, status]) => ({
     jobId,
@@ -62,7 +80,6 @@ app.get('/jobs', (req, res) => {
   res.json({ jobs, total: jobs.length });
 });
 
-// Main render endpoint
 app.post('/remotion-render', async (req, res) => {
   const jobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   
@@ -108,7 +125,6 @@ app.post('/remotion-render', async (req, res) => {
   }
 });
 
-// Status endpoint
 app.get('/status/:jobId', (req, res) => {
   const { jobId } = req.params;
   const status = jobStatuses.get(jobId);
@@ -120,7 +136,6 @@ app.get('/status/:jobId', (req, res) => {
   res.json({ jobId, ...status });
 });
 
-// Download endpoint
 app.get('/download/:jobId', (req, res) => {
   const { jobId } = req.params;
   const status = jobStatuses.get(jobId);
@@ -169,16 +184,28 @@ async function processRenderJob(jobId, scenes, subtitles) {
   try {
     jobStatuses.set(jobId, { ...jobStatuses.get(jobId), progress: 0.05, status: 'bundling' });
     
-    console.log(`[${jobId}] Bundling Remotion...`);
+    // ✅ DEBUG: Check file system
+    console.log(`[${jobId}] Current directory:`, process.cwd());
+    console.log(`[${jobId}] __dirname:`, __dirname);
+    console.log(`[${jobId}] Project files:`, fs.readdirSync(__dirname));
     
-    // ✅ FIXED: Correct entry point path
-    const entryPoint = path.join(__dirname, 'src', 'index.jsx');
-    console.log(`[${jobId}] Entry point: ${entryPoint}`);
+    const srcPath = path.join(__dirname, 'src');
+    const entryPoint = path.join(srcPath, 'index.jsx');
     
-    // Check if file exists
+    console.log(`[${jobId}] Looking for entry at:`, entryPoint);
+    console.log(`[${jobId}] src folder exists:`, fs.existsSync(srcPath));
+    
+    if (fs.existsSync(srcPath)) {
+      console.log(`[${jobId}] Files in src:`, fs.readdirSync(srcPath));
+    } else {
+      throw new Error(`src folder not found at ${srcPath}. Project files: ${fs.readdirSync(__dirname).join(', ')}`);
+    }
+    
     if (!fs.existsSync(entryPoint)) {
       throw new Error(`Entry point not found: ${entryPoint}`);
     }
+    
+    console.log(`[${jobId}] ✅ Entry point found, bundling...`);
     
     bundleLocation = await bundle({
       entryPoint: entryPoint,
@@ -189,7 +216,6 @@ async function processRenderJob(jobId, scenes, subtitles) {
     
     jobStatuses.set(jobId, { ...jobStatuses.get(jobId), progress: 0.1, status: 'rendering' });
     
-    // Render each scene
     for (let i = 0; i < scenes.length; i++) {
       const scene = scenes[i];
       const sceneOutputPath = path.join(tempDir, `${jobId}_scene_${i}.mp4`);
@@ -266,7 +292,6 @@ async function processRenderJob(jobId, scenes, subtitles) {
       console.log(`[${jobId}] Scene ${i + 1} complete`);
     }
     
-    // Concatenate
     jobStatuses.set(jobId, { 
       ...jobStatuses.get(jobId), 
       progress: 0.95, 
@@ -294,7 +319,6 @@ async function processRenderJob(jobId, scenes, subtitles) {
     
     console.log(`[${jobId}] ✅ COMPLETE in ${duration}s (${fileSizeMB} MB)`);
     
-    // Cleanup temp files
     setTimeout(() => {
       scenePaths.forEach(p => {
         try { fs.unlinkSync(p); } catch (e) {}
@@ -340,7 +364,6 @@ async function concatenateScenes(scenePaths, outputPath) {
   }
 }
 
-// Cleanup old jobs
 setInterval(() => {
   const now = Date.now();
   for (const [jobId, status] of jobStatuses.entries()) {
@@ -361,6 +384,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('═══════════════════════════════════════');
   console.log(`Port: ${PORT}`);
   console.log(`Health: http://localhost:${PORT}/health`);
+  console.log(`Debug: http://localhost:${PORT}/debug/files`);
   console.log('═══════════════════════════════════════');
 });
 
