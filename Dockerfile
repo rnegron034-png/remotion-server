@@ -1,38 +1,26 @@
 FROM node:20-bullseye
 
-# Install dependencies
 RUN apt-get update && apt-get install -y \
-    chromium \
-    ffmpeg \
-    fonts-liberation \
-    libnss3 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libxkbcommon0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxrandr2 \
-    libgbm1 \
-    libasound2 \
-    && rm -rf /var/lib/apt/lists/*
+  chromium \
+  ffmpeg \
+  fonts-liberation \
+  libnss3 libatk-bridge2.0-0 libcups2 \
+  libdrm2 libxkbcommon0 libxcomposite1 \
+  libxdamage1 libxrandr2 libgbm1 libasound2 \
+  && rm -rf /var/lib/apt/lists/*
 
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PUPPETEER_SKIP_DOWNLOAD=true
-
-# Memory optimization for Node.js
 ENV NODE_OPTIONS="--max-old-space-size=1536"
 
 WORKDIR /app
-
 COPY package*.json ./
+RUN npm install
 
-RUN npm install || npm install --legacy-peer-deps
-
-COPY server.js ./
+COPY server.js .
+COPY src ./src
 
 RUN mkdir -p /app/renders
 
 EXPOSE 3000
-
 CMD ["node", "server.js"]
