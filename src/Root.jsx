@@ -1,25 +1,16 @@
+import React from 'react';
 import { Composition } from 'remotion';
-import { VideoComposition } from './Video';
+import { Video } from './Video';
 
-export const RemotionRoot = () => {
+export const Root = () => {
   return (
-    <>
-      <Composition
-  id="VideoComposition"
-  component={VideoSequence}
-  durationInFrames={scene.durationInFrames}
-  fps={30}
-  width={720}
-  height={1280}
-/>
-        defaultProps={{
-          scene: {
-            src: '',
-            durationInFrames: 300,
-          },
-          subtitles: [],
-        }}
-      />
-    </>
+    <Composition
+      id="VideoComposition"
+      component={Video}
+      fps={30}
+      width={720}     // 🚨 DO NOT CHANGE (Railway-safe)
+      height={1280}   // 🚨 DO NOT CHANGE (Railway-safe)
+      durationInFrames={1} // overridden per scene
+    />
   );
 };
