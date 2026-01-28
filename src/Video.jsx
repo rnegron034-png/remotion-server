@@ -1,29 +1,17 @@
 import React from 'react';
 import { Video as RemotionVideo, AbsoluteFill } from 'remotion';
 
-export default function Video({ scene }) {
-  if (!scene?.src) {
-    return (
-      <AbsoluteFill
-        style={{
-          backgroundColor: 'black',
-          color: 'white',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontSize: 48,
-        }}
-      >
-        Missing scene source
-      </AbsoluteFill>
-    );
-  }
-
+export default function Video({ scene, subtitles }) {
   return (
-    <RemotionVideo
-      src={scene.src}
-      startFrom={0}
-      endAt={scene.durationInFrames}
-    />
+    <AbsoluteFill style={{ backgroundColor: 'black' }}>
+      <RemotionVideo
+        src={scene.src}
+        style={{
+          width: '100%',
+          height: '100%',
+          objectFit: 'cover',   // 🔥 This forces 9:16 crop
+        }}
+      />
+    </AbsoluteFill>
   );
 }
