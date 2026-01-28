@@ -1,4 +1,4 @@
 import { registerRoot } from 'remotion';
-import { RemotionRoot } from './Root';
+import Root from './Root.jsx';
 
-registerRoot(RemotionRoot);
+registerRoot(Root);
