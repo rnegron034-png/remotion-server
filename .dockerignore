@@ -1,6 +1,2 @@
 node_modules
-videos
 .git
-.env
-dist
-.cache
