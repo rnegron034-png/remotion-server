@@ -7,10 +7,10 @@ export const RemotionRoot = () => {
       <Composition
         id="VideoComposition"
         component={VideoComposition}
-        durationInFrames={300} // Default, overridden by inputProps
+        durationInFrames={300}
         fps={30}
         width={1080}
-        height={1920} // 9:16 vertical
+        height={1920}
         defaultProps={{
           scene: {
             src: '',
