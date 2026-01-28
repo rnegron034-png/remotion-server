@@ -51,27 +51,6 @@ app.get('/', (req, res) => {
   });
 });
 
-// Debug endpoint - check file system
-app.get('/debug/files', (req, res) => {
-  try {
-    const projectFiles = fs.readdirSync(__dirname);
-    const srcExists = fs.existsSync(path.join(__dirname, 'src'));
-    const srcFiles = srcExists ? fs.readdirSync(path.join(__dirname, 'src')) : [];
-    
-    res.json({
-      cwd: process.cwd(),
-      __dirname,
-      projectFiles,
-      srcExists,
-      srcFiles,
-      entryPoint: path.join(__dirname, 'src', 'index.jsx'),
-      entryExists: fs.existsSync(path.join(__dirname, 'src', 'index.jsx'))
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 app.get('/jobs', (req, res) => {
   const jobs = Array.from(jobStatuses.entries()).map(([jobId, status]) => ({
     jobId,
@@ -184,28 +163,13 @@ async function processRenderJob(jobId, scenes, subtitles) {
   try {
     jobStatuses.set(jobId, { ...jobStatuses.get(jobId), progress: 0.05, status: 'bundling' });
     
-    // ✅ DEBUG: Check file system
-    console.log(`[${jobId}] Current directory:`, process.cwd());
-    console.log(`[${jobId}] __dirname:`, __dirname);
-    console.log(`[${jobId}] Project files:`, fs.readdirSync(__dirname));
+    console.log(`[${jobId}] Bundling Remotion...`);
     
-    const srcPath = path.join(__dirname, 'src');
-    const entryPoint = path.join(srcPath, 'index.jsx');
-    
-    console.log(`[${jobId}] Looking for entry at:`, entryPoint);
-    console.log(`[${jobId}] src folder exists:`, fs.existsSync(srcPath));
-    
-    if (fs.existsSync(srcPath)) {
-      console.log(`[${jobId}] Files in src:`, fs.readdirSync(srcPath));
-    } else {
-      throw new Error(`src folder not found at ${srcPath}. Project files: ${fs.readdirSync(__dirname).join(', ')}`);
-    }
+    const entryPoint = path.join(__dirname, 'src', 'index.jsx');
     
     if (!fs.existsSync(entryPoint)) {
       throw new Error(`Entry point not found: ${entryPoint}`);
     }
-    
-    console.log(`[${jobId}] ✅ Entry point found, bundling...`);
     
     bundleLocation = await bundle({
       entryPoint: entryPoint,
@@ -216,6 +180,7 @@ async function processRenderJob(jobId, scenes, subtitles) {
     
     jobStatuses.set(jobId, { ...jobStatuses.get(jobId), progress: 0.1, status: 'rendering' });
     
+    // Render each scene
     for (let i = 0; i < scenes.length; i++) {
       const scene = scenes[i];
       const sceneOutputPath = path.join(tempDir, `${jobId}_scene_${i}.mp4`);
@@ -237,6 +202,7 @@ async function processRenderJob(jobId, scenes, subtitles) {
         inputProps: { scene, subtitles },
       });
       
+      // ✅ FIXED: Proper renderMedia config
       await renderMedia({
         composition,
         serveUrl: bundleLocation,
@@ -244,6 +210,7 @@ async function processRenderJob(jobId, scenes, subtitles) {
         outputLocation: sceneOutputPath,
         inputProps: { scene, subtitles },
         
+        // 🔒 Chromium config
         chromiumOptions: {
           executablePath: '/usr/bin/chromium',
           disableWebSecurity: false,
@@ -269,37 +236,53 @@ async function processRenderJob(jobId, scenes, subtitles) {
           ],
         },
         
+        // 🔒 CRITICAL: Proper FFmpeg settings (NO ffmpegOverride)
         concurrency: 1,
-        frameRange: [0, scene.durationInFrames - 1],
-        videoCodec: 'libx264',
-        audioCodec: 'aac',
+        muted: false,
+        enforceAudioTrack: false,
         pixelFormat: 'yuv420p',
+        codec: 'h264',
+        videoBitrate: '2000k',
+        audioBitrate: '128k',
         
-        ffmpegOverride: ({ args }) => [
-          '-threads', '1',
-          '-preset', 'ultrafast',
-          '-crf', '28',
-          ...args,
-        ],
+        // ✅ REMOVED ffmpegOverride - let Remotion handle it correctly
+        // The issue was our override was putting encoding options on input side
         
         onProgress: ({ progress }) => {
           const sceneProgress = progressPercent + (progress * 0.8 / scenes.length);
           jobStatuses.set(jobId, { ...jobStatuses.get(jobId), progress: sceneProgress });
         },
+        
+        // ✅ Add these to prevent memory issues
+        numberOfGifLoops: null,
+        everyNthFrame: 1,
+        
+        // ✅ Ensure proper frame range
+        frameRange: [0, scene.durationInFrames - 1],
       });
       
       scenePaths.push(sceneOutputPath);
-      console.log(`[${jobId}] Scene ${i + 1} complete`);
+      console.log(`[${jobId}] Scene ${i + 1} complete: ${sceneOutputPath}`);
+      
+      // ✅ Verify file was created
+      if (!fs.existsSync(sceneOutputPath)) {
+        throw new Error(`Scene ${i} output file not created: ${sceneOutputPath}`);
+      }
+      
+      const fileSize = fs.statSync(sceneOutputPath).size;
+      console.log(`[${jobId}] Scene ${i + 1} size: ${(fileSize / 1024 / 1024).toFixed(2)} MB`);
     }
     
+    // Concatenate
     jobStatuses.set(jobId, { 
       ...jobStatuses.get(jobId), 
       progress: 0.95, 
-      status: 'concatenating' 
+      status: 'concatenating',
+      message: 'Merging scenes...'
     });
     
     const finalOutputPath = path.join(tempDir, `${jobId}_final.mp4`);
-    console.log(`[${jobId}] Concatenating scenes...`);
+    console.log(`[${jobId}] Concatenating ${scenePaths.length} scenes...`);
     
     await concatenateScenes(scenePaths, finalOutputPath);
     
@@ -315,15 +298,23 @@ async function processRenderJob(jobId, scenes, subtitles) {
       duration: `${duration}s`,
       fileSize: `${fileSizeMB} MB`,
       completedAt: Date.now(),
+      message: 'Render complete'
     });
     
     console.log(`[${jobId}] ✅ COMPLETE in ${duration}s (${fileSizeMB} MB)`);
     
+    // Cleanup temp scene files after 30 seconds
     setTimeout(() => {
+      console.log(`[${jobId}] Cleaning up temp scene files...`);
       scenePaths.forEach(p => {
-        try { fs.unlinkSync(p); } catch (e) {}
+        try { 
+          fs.unlinkSync(p);
+          console.log(`[${jobId}] Deleted: ${path.basename(p)}`);
+        } catch (e) {
+          console.error(`[${jobId}] Failed to delete ${p}:`, e.message);
+        }
       });
-    }, 10000);
+    }, 30000);
     
   } catch (error) {
     console.error(`[${jobId}] ❌ ERROR:`, error.message);
@@ -336,6 +327,11 @@ async function processRenderJob(jobId, scenes, subtitles) {
       errorDetails: error.stack,
       failedAt: Date.now()
     });
+    
+    // Cleanup on failure
+    scenePaths.forEach(p => {
+      try { fs.unlinkSync(p); } catch (e) {}
+    });
   }
 }
 
@@ -343,35 +339,78 @@ async function concatenateScenes(scenePaths, outputPath) {
   const concatFilePath = '/tmp/concat_list.txt';
   
   try {
+    // Verify all scene files exist
+    for (const scenePath of scenePaths) {
+      if (!fs.existsSync(scenePath)) {
+        throw new Error(`Scene file missing: ${scenePath}`);
+      }
+    }
+    
     const concatContent = scenePaths.map(p => `file '${p}'`).join('\n');
     fs.writeFileSync(concatFilePath, concatContent);
     
+    console.log('FFmpeg concat file content:', concatContent);
+    
+    // ✅ CRITICAL: Proper FFmpeg concat with explicit codec copy
     await execFilePromise('ffmpeg', [
       '-f', 'concat',
       '-safe', '0',
       '-i', concatFilePath,
-      '-c', 'copy',
-      '-threads', '1',
+      '-c:v', 'copy',  // Copy video stream
+      '-c:a', 'copy',  // Copy audio stream
       '-y',
       outputPath,
-    ]);
+    ], {
+      maxBuffer: 50 * 1024 * 1024 // 50MB buffer for logs
+    });
     
     console.log('FFmpeg concat complete');
+    
+    // Verify output
+    if (!fs.existsSync(outputPath)) {
+      throw new Error('Concat output file not created');
+    }
+    
     return outputPath;
     
+  } catch (error) {
+    console.error('FFmpeg concat error:', error);
+    throw new Error(`Concatenation failed: ${error.message}`);
   } finally {
-    try { fs.unlinkSync(concatFilePath); } catch (e) {}
+    try { 
+      fs.unlinkSync(concatFilePath); 
+    } catch (e) {
+      console.error('Failed to cleanup concat file:', e.message);
+    }
   }
 }
 
+// Cleanup old jobs every 10 minutes
 setInterval(() => {
   const now = Date.now();
+  const maxAge = 3600000; // 1 hour
+  
   for (const [jobId, status] of jobStatuses.entries()) {
     const age = now - status.startTime;
-    if (status.status === 'completed' && age > 3600000) {
+    
+    if (status.status === 'completed' && age > maxAge) {
+      console.log(`Cleaning up old job: ${jobId} (${(age/60000).toFixed(0)} min old)`);
+      
       if (status.outputPath) {
-        try { fs.unlinkSync(status.outputPath); } catch (e) {}
+        try { 
+          fs.unlinkSync(status.outputPath);
+          console.log(`Deleted output: ${jobId}`);
+        } catch (e) {
+          console.error(`Failed to delete ${jobId}:`, e.message);
+        }
       }
+      
+      jobStatuses.delete(jobId);
+    }
+    
+    // Delete failed jobs older than 10 minutes
+    if (status.status === 'failed' && age > 600000) {
+      console.log(`Removing old failed job: ${jobId}`);
       jobStatuses.delete(jobId);
     }
   }
@@ -383,10 +422,30 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('✅ Remotion Render Server READY');
   console.log('═══════════════════════════════════════');
   console.log(`Port: ${PORT}`);
+  console.log(`Node: ${process.version}`);
+  console.log(`Memory: ${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2)} MB`);
+  console.log('═══════════════════════════════════════');
   console.log(`Health: http://localhost:${PORT}/health`);
-  console.log(`Debug: http://localhost:${PORT}/debug/files`);
+  console.log(`Render: POST http://localhost:${PORT}/remotion-render`);
   console.log('═══════════════════════════════════════');
 });
 
-process.on('SIGTERM', () => process.exit(0));
-process.on('SIGINT', () => process.exit(0));
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down...');
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT received, shutting down...');
+  process.exit(0);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  // Don't exit - log and continue
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection:', reason);
+  // Don't exit - log and continue
+});
