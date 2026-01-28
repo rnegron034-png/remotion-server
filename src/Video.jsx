@@ -1,13 +1,11 @@
 import React from 'react';
-import { Video as RemotionVideo } from 'remotion';
+import { Video as RemotionVideo, AbsoluteFill } from 'remotion';
 
-export const Video = ({ scene }) => {
+export default function Video({ scene }) {
   if (!scene?.src) {
     return (
-      <div
+      <AbsoluteFill
         style={{
-          width: '100%',
-          height: '100%',
           backgroundColor: 'black',
           color: 'white',
           display: 'flex',
@@ -16,8 +14,8 @@ export const Video = ({ scene }) => {
           fontSize: 48,
         }}
       >
-        No scene source
-      </div>
+        Missing scene source
+      </AbsoluteFill>
     );
   }
 
@@ -28,4 +26,4 @@ export const Video = ({ scene }) => {
       endAt={scene.durationInFrames}
     />
   );
-};
+}
