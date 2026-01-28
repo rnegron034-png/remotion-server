@@ -142,4 +142,146 @@ app.get('/status/:jobId', (req, res) => {
 
 app.get('/download/:jobId', (req, res) => {
   const job = jobStatuses.get(req.params.jobId);
-  if (!job) return res.status(404).json({ error: 'J
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  if (job.status !== 'completed')
+    return res.status(400).json({ error: 'Job not completed' });
+
+  res.download(job.outputPath, `render_${req.params.jobId}.mp4`);
+});
+
+/* ────────────────────────────────────────────── */
+/* RENDER PIPELINE (SCENE-BY-SCENE)               */
+/* ────────────────────────────────────────────── */
+
+async function processRenderJob(jobId, scenes, subtitles) {
+  const job = jobStatuses.get(jobId);
+  const tempDir = '/tmp';
+  const scenePaths = [];
+  let bundleLocation;
+
+  try {
+    job.status = 'bundling';
+    job.stage = 'bundling';
+
+    bundleLocation = await bundle({
+      entryPoint: path.join(__dirname, 'src', 'index.jsx'),
+    });
+
+    job.status = 'rendering';
+
+    for (let i = 0; i < scenes.length; i++) {
+      job.currentScene = i + 1;
+      job.stage = `rendering scene ${i + 1}/${scenes.length}`;
+      job.progress = i / scenes.length;
+
+      const sceneOutput = path.join(tempDir, `${jobId}_scene_${i}.mp4`);
+
+      const composition = await selectComposition({
+        serveUrl: bundleLocation,
+        id: 'VideoComposition',
+        inputProps: { scene: scenes[i], subtitles },
+      });
+
+      await renderMedia({
+        composition,
+        serveUrl: bundleLocation,
+        codec: 'h264',
+        outputLocation: sceneOutput,
+        inputProps: { scene: scenes[i], subtitles },
+
+        concurrency: 1,
+        imageFormat: 'jpeg',
+        jpegQuality: 80,
+        crf: 23,
+        x264Preset: 'veryfast',
+        pixelFormat: 'yuv420p',
+
+        // 🔥 OOM FIX (MANDATORY)
+        x264Params: [
+          'threads=2',
+          'lookahead-threads=1',
+          'sliced-threads=0',
+          'sync-lookahead=0',
+          'rc-lookahead=10',
+        ],
+
+        chromiumOptions: {
+          headless: true,
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--single-process',
+            '--no-zygote',
+          ],
+        },
+      });
+
+      scenePaths.push(sceneOutput);
+    }
+
+    /* CONCAT */
+    job.stage = 'concatenating';
+    const concatList = path.join(tempDir, `${jobId}_concat.txt`);
+    fs.writeFileSync(
+      concatList,
+      scenePaths.map(p => `file '${p}'`).join('\n')
+    );
+
+    const finalOutput = path.join(tempDir, `${jobId}_final.mp4`);
+    await execFilePromise('ffmpeg', [
+      '-y',
+      '-f',
+      'concat',
+      '-safe',
+      '0',
+      '-i',
+      concatList,
+      '-c',
+      'copy',
+      finalOutput,
+    ]);
+
+    job.status = 'completed';
+    job.stage = 'completed';
+    job.progress = 1;
+    job.outputPath = finalOutput;
+
+    /* Cleanup */
+    setTimeout(() => {
+      scenePaths.forEach(p => fs.unlink(p, () => {}));
+      fs.unlink(concatList, () => {});
+    }, 30000);
+  } catch (err) {
+    job.status = 'failed';
+    job.stage = 'failed';
+    job.error = err.message;
+  }
+}
+
+/* ────────────────────────────────────────────── */
+/* CLEANUP OLD JOBS                              */
+/* ────────────────────────────────────────────── */
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [jobId, job] of jobStatuses.entries()) {
+    if (job.status === 'completed' && now - job.startTime > 60 * 60 * 1000) {
+      try {
+        if (job.outputPath) fs.unlinkSync(job.outputPath);
+      } catch {}
+      jobStatuses.delete(jobId);
+    }
+  }
+}, 10 * 60 * 1000);
+
+/* ────────────────────────────────────────────── */
+/* START SERVER                                  */
+/* ────────────────────────────────────────────── */
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, '0.0.0.0', () => {
+  console.log('✅ Remotion Render Server READY');
+  console.log(`Listening on ${PORT}`);
+});
