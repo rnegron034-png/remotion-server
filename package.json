@@ -1,7 +1,6 @@
 {
   "name": "remotion-renderer",
   "type": "module",
-  "private": true,
   "scripts": {
     "start": "node server.js"
   },
