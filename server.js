@@ -1,47 +1,68 @@
+/**
+ * FINAL PRODUCTION RENDER SERVICE
+ * Railway-safe · Low-memory · n8n-compatible
+ */
+
 import express from 'express';
 import cors from 'cors';
 import { v4 as uuidv4 } from 'uuid';
-import fs from 'fs';
-import fsPromises from 'fs/promises';
-import path from 'path';
 import os from 'os';
+import path from 'path';
+import fs from 'fs/promises';
+import fsSync from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-import {
-  bundle,
-  getCompositions,
-  renderMedia,
-} from '@remotion/renderer';
-
 const execFileAsync = promisify(execFile);
 
-const app = express();
-app.use(cors());
-app.use(express.json({ limit: '10mb' }));
-
 /* ────────────────────────────────────────────── */
-/* GLOBAL SAFETY LIMITS (CRITICAL)                 */
+/* HARD GLOBAL SAFETY LIMITS (DO NOT REMOVE)      */
 /* ────────────────────────────────────────────── */
 
 process.env.UV_THREADPOOL_SIZE = '2';
 process.env.FFMPEG_LOGLEVEL = 'warning';
 process.env.AV_LOG_FORCE_NOCOLOR = '1';
 
-const PORT = process.env.PORT || 3000;
-const TMP = os.tmpdir();
-const JOBS = new Map();
-
 /* ────────────────────────────────────────────── */
-/* HEALTH                                         */
+/* EXPRESS BOOT — MUST BE FAST                    */
 /* ────────────────────────────────────────────── */
 
+const app = express();
+app.use(cors());
+app.use(express.json({ limit: '10mb' }));
+
+// Railway healthcheck — MUST be instant
 app.get('/health', (_, res) => {
-  res.json({ ok: true, memoryMB: Math.round(process.memoryUsage().rss / 1024 / 1024) });
+  res.status(200).send('OK');
+});
+
+app.get('/', (_, res) => {
+  res.send('Remotion render service alive');
+});
+
+const PORT = Number(process.env.PORT);
+if (!PORT) {
+  throw new Error('PORT environment variable not set');
+}
+
+app.listen(PORT, () => {
+  console.log(`Server listening on port ${PORT}`);
 });
 
 /* ────────────────────────────────────────────── */
-/* START RENDER                                   */
+/* EVERYTHING BELOW THIS LINE IS SAFE TO BE HEAVY */
+/* ────────────────────────────────────────────── */
+
+const TMP = os.tmpdir();
+const JOBS = new Map();
+
+/* Lazy-load Remotion (CRITICAL for Railway) */
+async function loadRemotion() {
+  return await import('@remotion/renderer');
+}
+
+/* ────────────────────────────────────────────── */
+/* START RENDER                                  */
 /* ────────────────────────────────────────────── */
 
 app.post('/remotion-render', async (req, res) => {
@@ -53,15 +74,17 @@ app.post('/remotion-render', async (req, res) => {
 
   for (const s of scenes) {
     if (!s.src || !s.durationInFrames) {
-      return res.status(400).json({ error: 'Each scene requires src + durationInFrames' });
+      return res.status(400).json({
+        error: 'Each scene requires src and durationInFrames',
+      });
     }
   }
 
   const jobId = `job_${Date.now()}_${uuidv4().slice(0, 8)}`;
+
   JOBS.set(jobId, {
     status: 'queued',
     progress: 0,
-    logs: [],
     startedAt: Date.now(),
   });
 
@@ -73,17 +96,20 @@ app.post('/remotion-render', async (req, res) => {
 });
 
 /* ────────────────────────────────────────────── */
-/* JOB RUNNER                                     */
+/* JOB RUNNER                                    */
 /* ────────────────────────────────────────────── */
 
 async function runJob(jobId, scenes, subtitles) {
   const job = JOBS.get(jobId);
   const workDir = path.join(TMP, jobId);
-  await fsPromises.mkdir(workDir, { recursive: true });
+  await fs.mkdir(workDir, { recursive: true });
+
+  const { bundle, getCompositions, renderMedia } =
+    await loadRemotion();
 
   try {
+    /* Bundle Remotion */
     job.status = 'bundling';
-
     const serveUrl = await bundle({
       entryPoint: path.resolve('./src/index.jsx'),
       outDir: path.join(workDir, 'bundle'),
@@ -91,14 +117,16 @@ async function runJob(jobId, scenes, subtitles) {
 
     const comps = await getCompositions(serveUrl);
     const composition = comps.find(c => c.id === 'Video');
-
     if (!composition) {
       throw new Error('Composition "Video" not found');
     }
 
-    const sceneFiles = [];
+    const sceneOutputs = [];
 
+    /* Render scenes one-by-one */
     for (let i = 0; i < scenes.length; i++) {
+      watchdog(job);
+
       job.status = `rendering_scene_${i + 1}`;
       job.progress = Math.round((i / scenes.length) * 80);
 
@@ -114,13 +142,14 @@ async function runJob(jobId, scenes, subtitles) {
           subtitles,
         },
 
+        // 🚨 MEMORY SAFETY
         concurrency: 1,
         imageFormat: 'jpeg',
         jpegQuality: 80,
         crf: 23,
         x264Preset: 'veryfast',
 
-        // 🔥 OOM FIX — DO NOT REMOVE
+        // 🔥 THE OOM FIX (MANDATORY)
         x264Params: [
           'threads=2',
           'lookahead-threads=1',
@@ -146,27 +175,31 @@ async function runJob(jobId, scenes, subtitles) {
         },
       });
 
-      sceneFiles.push(out);
-      await watchdog(jobId);
+      sceneOutputs.push(out);
     }
 
+    /* Concat (stream-copy, zero re-encode) */
     job.status = 'concatenating';
     job.progress = 90;
 
     const concatList = path.join(workDir, 'concat.txt');
-    await fsPromises.writeFile(
+    await fs.writeFile(
       concatList,
-      sceneFiles.map(f => `file '${f}'`).join('\n')
+      sceneOutputs.map(f => `file '${f}'`).join('\n')
     );
 
     const finalOut = path.join(workDir, 'final.mp4');
 
     await execFileAsync('ffmpeg', [
       '-y',
-      '-f', 'concat',
-      '-safe', '0',
-      '-i', concatList,
-      '-c', 'copy',
+      '-f',
+      'concat',
+      '-safe',
+      '0',
+      '-i',
+      concatList,
+      '-c',
+      'copy',
       finalOut,
     ]);
 
@@ -179,25 +212,25 @@ async function runJob(jobId, scenes, subtitles) {
 }
 
 /* ────────────────────────────────────────────── */
-/* WATCHDOG (STUCK JOB KILLER)                     */
+/* WATCHDOG — PREVENT STALLS / OOM                */
 /* ────────────────────────────────────────────── */
 
-async function watchdog(jobId) {
-  const job = JOBS.get(jobId);
+function watchdog(job) {
   const elapsed = Date.now() - job.startedAt;
-
   if (elapsed > 15 * 60 * 1000) {
     throw new Error('Render timeout exceeded');
   }
 
-  const memMB = process.memoryUsage().rss / 1024 / 1024;
+  const memMB =
+    process.memoryUsage().rss / 1024 / 1024;
+
   if (memMB > 420) {
-    throw new Error('Memory safety threshold exceeded');
+    throw new Error('Memory limit exceeded');
   }
 }
 
 /* ────────────────────────────────────────────── */
-/* FAIL JOB                                       */
+/* FAIL JOB                                      */
 /* ────────────────────────────────────────────── */
 
 function failJob(jobId, err) {
@@ -208,7 +241,7 @@ function failJob(jobId, err) {
 }
 
 /* ────────────────────────────────────────────── */
-/* STATUS / DOWNLOAD                              */
+/* STATUS + DOWNLOAD                             */
 /* ────────────────────────────────────────────── */
 
 app.get('/status/:jobId', (req, res) => {
@@ -223,12 +256,4 @@ app.get('/download/:jobId', (req, res) => {
     return res.status(404).json({ error: 'not ready' });
   }
   res.download(job.output);
-});
-
-/* ────────────────────────────────────────────── */
-/* START SERVER                                   */
-/* ────────────────────────────────────────────── */
-
-app.listen(PORT, () => {
-  console.log(`Render service running on :${PORT}`);
 });
