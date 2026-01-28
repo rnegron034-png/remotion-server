@@ -5,12 +5,13 @@ export const RemotionRoot = () => {
   return (
     <>
       <Composition
-        id="VideoComposition"
-        component={VideoComposition}
-        durationInFrames={300}
-        fps={30}
-        width={1080}
-        height={1920}
+  id="VideoComposition"
+  component={VideoSequence}
+  durationInFrames={scene.durationInFrames}
+  fps={30}
+  width={720}
+  height={1280}
+/>
         defaultProps={{
           scene: {
             src: '',
