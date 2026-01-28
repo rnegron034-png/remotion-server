@@ -6,7 +6,6 @@ import { exec } from 'child_process';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import fetch from 'node-fetch';
 import SrtParser from 'srt-parser-2';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -74,6 +73,23 @@ async function loadSrtSubtitles(srtUrl) {
     text: s.text.replace(/\n/g, ' '),
   }));
 }
+
+async function loadSrtSubtitles(srtUrl) {
+  const parser = new SrtParser();
+
+  const res = await fetch(normalizeDriveUrl(srtUrl)); // ← native fetch
+  if (!res.ok) throw new Error('Failed to download SRT');
+
+  const text = await res.text();
+  const parsed = parser.fromSrt(text);
+
+  return parsed.map(s => ({
+    startFrame: timeToFrames(s.startTime),
+    endFrame: timeToFrames(s.endTime),
+    text: s.text.replace(/\n/g, ' '),
+  }));
+}
+
 
 // ============================
 // POST /remotion-render
