@@ -14,7 +14,6 @@ const jobs = new Map();
 const WORKDIR = "/tmp/jobs";
 fs.mkdirSync(WORKDIR, { recursive: true });
 
-// Configuration for cleanup
 const CLEANUP_CONFIG = {
   cleanupBeforeNewJob: true,
   deleteAfterHours: 2,
@@ -143,59 +142,59 @@ ${s.text}
   }).join("");
 }
 
-/* ---------------- PROPERLY SIZED SUBTITLE STYLES (18PX BASE) ---------------- */
+/* ---------------- POPPINS 12PX WITH -30 TRACKING ---------------- */
 
 const SUBTITLE_STYLES = {
-  // Clean & Readable - Perfect 18px size
+  // Your exact requirements: Poppins, 12px, -30 tracking
   default: {
-    name: "Default (18px)",
-    style: `Fontname=Arial Bold,Fontsize=18,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=50`
+    name: "Poppins 12px (tracking -30)",
+    style: `Fontname=Poppins SemiBold,Fontsize=12,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=40,Spacing=-30`
   },
 
-  // Slightly larger for better visibility - 22px
+  // Alternative: Slightly larger
   medium: {
-    name: "Medium (22px)",
-    style: `Fontname=Arial Bold,Fontsize=22,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=60`
+    name: "Poppins 14px (tracking -30)",
+    style: `Fontname=Poppins SemiBold,Fontsize=14,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=45,Spacing=-30`
   },
 
-  // Standard subtitle size - 24px
-  standard: {
-    name: "Standard (24px)",
-    style: `Fontname=Arial Bold,Fontsize=24,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=70`
-  },
-
-  // With background box for better readability - 18px
+  // With background box
   boxed: {
-    name: "Boxed (18px)",
-    style: `Fontname=Arial Bold,Fontsize=18,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&HC0000000&,Bold=1,BorderStyle=4,Outline=1,Shadow=1,Alignment=2,MarginV=50`
+    name: "Poppins 12px Boxed (tracking -30)",
+    style: `Fontname=Poppins SemiBold,Fontsize=12,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&HC0000000&,Bold=1,BorderStyle=4,Outline=1,Shadow=1,Alignment=2,MarginV=40,Spacing=-30`
   },
 
-  // Yellow highlight style - 20px
-  highlight: {
-    name: "Highlight (20px)",
-    style: `Fontname=Arial Black,Fontsize=20,PrimaryColour=&H000000&,OutlineColour=&H000000&,BackColour=&H00FFFF&,Bold=1,BorderStyle=4,Outline=1,Shadow=0,Alignment=2,MarginV=60`
-  },
-
-  // Minimal clean - 18px
-  minimal: {
-    name: "Minimal (18px)",
-    style: `Fontname=Arial,Fontsize=18,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=0,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=50`
-  },
-
-  // Professional style - 20px
-  professional: {
-    name: "Professional (20px)",
-    style: `Fontname=Arial Bold,Fontsize=20,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H96000000&,Bold=1,BorderStyle=4,Outline=1,Shadow=1,Alignment=2,MarginV=60`
-  },
-
-  // Bold for emphasis - 26px
+  // Bolder version
   bold: {
-    name: "Bold (26px)",
-    style: `Fontname=Arial Black,Fontsize=26,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=3,Shadow=2,Alignment=2,MarginV=80`
+    name: "Poppins Bold 12px (tracking -30)",
+    style: `Fontname=Poppins Bold,Fontsize=12,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=40,Spacing=-30`
+  },
+
+  // Regular (not bold)
+  regular: {
+    name: "Poppins Regular 12px (tracking -30)",
+    style: `Fontname=Poppins,Fontsize=12,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=0,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=40,Spacing=-30`
+  },
+
+  // Larger with same tracking
+  large: {
+    name: "Poppins 16px (tracking -30)",
+    style: `Fontname=Poppins SemiBold,Fontsize=16,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=50,Spacing=-30`
+  },
+
+  // Yellow highlight
+  highlight: {
+    name: "Poppins 12px Yellow (tracking -30)",
+    style: `Fontname=Poppins SemiBold,Fontsize=12,PrimaryColour=&H000000&,OutlineColour=&H000000&,BackColour=&H00FFFF&,Bold=1,BorderStyle=4,Outline=1,Shadow=0,Alignment=2,MarginV=40,Spacing=-30`
+  },
+
+  // Extra tight tracking (-40)
+  extraTight: {
+    name: "Poppins 12px (tracking -40)",
+    style: `Fontname=Poppins SemiBold,Fontsize=12,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=40,Spacing=-40`
   }
 };
 
-// DEFAULT: 18px clean style
+// DEFAULT: Poppins 12px with -30 tracking
 const DEFAULT_STYLE = SUBTITLE_STYLES.default.style;
 
 /* ---------------- API ---------------- */
@@ -310,7 +309,6 @@ async function processJob(jobId, payload) {
   const audioUrl = payload.client_payload.audio.src;
   const subtitles = payload.client_payload.subtitles || [];
 
-  // Get style from payload or use default (18px)
   let subtitleStyle = DEFAULT_STYLE;
   
   if (payload.client_payload.subtitleStyle) {
@@ -319,22 +317,18 @@ async function processJob(jobId, payload) {
       subtitleStyle = SUBTITLE_STYLES[requestedStyle].style;
       console.log(`Using subtitle style: ${SUBTITLE_STYLES[requestedStyle].name}`);
     } else {
-      // Custom style string provided
       subtitleStyle = requestedStyle;
     }
   }
 
   update(jobId, { status: "downloading", stage: "Downloading", progress: 5 });
 
-  // Download audio
   const audioPath = path.join(dir, "audio.mp3");
   await download(audioUrl, audioPath);
 
-  // Write subtitles
   const srtPath = path.join(dir, "subs.srt");
   fs.writeFileSync(srtPath, subtitlesToSrt(subtitles));
 
-  // Download clips
   const clips = [];
   for (let i = 0; i < scenes.length; i++) {
     const p = path.join(dir, `clip_${i}.mp4`);
@@ -345,7 +339,6 @@ async function processJob(jobId, payload) {
 
   update(jobId, { status: "processing", stage: "Processing clips", progress: 50 });
 
-  // Normalize + crop to 9:16
   const fixed = [];
   for (let i = 0; i < clips.length; i++) {
     const out = path.join(dir, `fixed_${i}.mp4`);
@@ -358,7 +351,6 @@ async function processJob(jobId, payload) {
 
   update(jobId, { stage: "Merging clips", progress: 70 });
 
-  // Concat
   const list = path.join(dir, "list.txt");
   fs.writeFileSync(list, fixed.map(f => `file '${f}'`).join("\n"));
   const merged = path.join(dir, "merged.mp4");
@@ -366,10 +358,7 @@ async function processJob(jobId, payload) {
 
   update(jobId, { stage: "Adding subtitles and audio", progress: 85 });
 
-  // Burn subtitles + add audio
   const final = path.join(dir, "final.mp4");
-  
-  // Escape SRT path for FFmpeg
   const escapedSrtPath = srtPath.replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/'/g, "'\\''");
   
   await execAsync(
@@ -403,6 +392,7 @@ async function download(url, output) {
 
 app.listen(process.env.PORT || 3000, () => {
   console.log("🚀 Remotion server ready!");
-  console.log("📝 Subtitle size: 18px (default) - Clean & Readable");
+  console.log("📝 Font: Poppins SemiBold, 12px");
+  console.log("📏 Letter spacing: -30 (tight tracking)");
   console.log(`🧹 Cleanup: Before each job (keep ${CLEANUP_CONFIG.keepCompletedJobs} recent)`);
 });
