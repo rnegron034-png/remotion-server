@@ -16,27 +16,53 @@ fs.mkdirSync(WORKDIR, { recursive: true });
 
 function execAsync(cmd) {
   return new Promise((resolve, reject) => {
-    exec(cmd, { maxBuffer: 1024 * 1024 * 50 }, (err, stdout, stderr) => {
+    exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, (err, stdout, stderr) => {
       if (err) reject(stderr || err);
       else resolve(stdout);
     });
   });
 }
 
-const jobPath = id => path.join(WORKDIR, id);
-
-function update(jobId, data) {
-  const j = jobs.get(jobId);
-  if (j) jobs.set(jobId, { ...j, ...data, lastUpdated: new Date().toISOString() });
+function jobPath(id) {
+  return path.join(WORKDIR, id);
 }
 
-/* ===============================
-   CREATE JOB
-================================*/
+function update(jobId, patch) {
+  const j = jobs.get(jobId);
+  if (j) jobs.set(jobId, { ...j, ...patch, lastUpdated: new Date().toISOString() });
+}
+
+/* ---------------- SRT CONVERSION ---------------- */
+
+function toSrtTime(t) {
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const s = Math.floor(t % 60);
+  const ms = Math.floor((t - Math.floor(t)) * 1000);
+  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")},${String(ms).padStart(3,"0")}`;
+}
+
+function subtitlesToSrt(subs) {
+  return subs.map((s, i) => {
+    return `${i+1}
+${toSrtTime(s.start)} --> ${toSrtTime(s.end)}
+${s.text}
+
+`;
+  }).join("");
+}
+
+/* ---------------- API ---------------- */
+
 app.post("/remotion-render", async (req, res) => {
   const payload = req.body;
-  if (!payload?.client_payload?.scenes?.length) return res.status(400).json({ error: "Scenes missing" });
-  if (!payload?.client_payload?.audio?.src) return res.status(400).json({ error: "Audio missing" });
+
+  if (!payload?.client_payload?.scenes?.length) {
+    return res.status(400).json({ error: "Scenes missing" });
+  }
+  if (!payload?.client_payload?.audio?.src) {
+    return res.status(400).json({ error: "Audio missing" });
+  }
 
   const jobId = uuidv4();
   const dir = jobPath(jobId);
@@ -50,11 +76,12 @@ app.post("/remotion-render", async (req, res) => {
     totalScenes: payload.client_payload.scenes.length,
     processedScenes: 0,
     startTime: new Date().toISOString(),
+    lastUpdated: new Date().toISOString(),
     downloadUrl: null,
     error: null
   });
 
-  res.json({ jobId, statusUrl: `/status/${jobId}` });
+  res.json({ jobId, status: "queued", statusUrl: `/status/${jobId}` });
 
   processJob(jobId, payload).catch(e => {
     console.error(e);
@@ -62,81 +89,66 @@ app.post("/remotion-render", async (req, res) => {
   });
 });
 
-/* ===============================
-   STATUS
-================================*/
-app.get("/status/:id", (req, res) => {
-  const j = jobs.get(req.params.id);
+app.get("/status/:jobId", (req, res) => {
+  const j = jobs.get(req.params.jobId);
   if (!j) return res.status(404).json({ error: "Not found" });
   res.json(j);
 });
 
-/* ===============================
-   DOWNLOAD
-================================*/
-app.get("/download/:id", (req, res) => {
-  const j = jobs.get(req.params.id);
+app.get("/download/:jobId", (req, res) => {
+  const j = jobs.get(req.params.jobId);
   if (!j || j.status !== "done") return res.status(400).json({ error: "Not ready" });
   res.download(j.outputFile, `video_${j.jobId}.mp4`);
 });
 
-/* ===============================
-   PIPELINE
-================================*/
+/* ---------------- JOB PIPELINE ---------------- */
+
 async function processJob(jobId, payload) {
   const dir = jobPath(jobId);
   const scenes = payload.client_payload.scenes;
   const audioUrl = payload.client_payload.audio.src;
-  const subtitles = payload.client_payload.subtitles || "";
+  const subtitles = payload.client_payload.subtitles || [];
 
-  update(jobId, { stage: "Downloading audio", progress: 5 });
+  update(jobId, { status: "downloading", stage: "Downloading", progress: 5 });
 
+  // Download audio
   const audioPath = path.join(dir, "audio.mp3");
   await download(audioUrl, audioPath);
 
-  const clipList = [];
+  // Write subtitles correctly
+  const srtPath = path.join(dir, "subs.srt");
+  fs.writeFileSync(srtPath, subtitlesToSrt(subtitles));   // << FIXED
 
+  // Download clips
+  const clips = [];
   for (let i = 0; i < scenes.length; i++) {
-    update(jobId, { stage: `Downloading clip ${i + 1}`, processedScenes: i, progress: 10 + (i / scenes.length) * 30 });
     const p = path.join(dir, `clip_${i}.mp4`);
     await download(scenes[i].src, p);
-    clipList.push(p);
+    clips.push(p);
+    update(jobId, { processedScenes: i + 1, progress: 10 + (i/scenes.length)*40 });
   }
 
-  update(jobId, { stage: "Normalizing & cropping", progress: 50 });
-
+  // Normalize + crop to 9:16
   const fixed = [];
-  for (let i = 0; i < clipList.length; i++) {
+  for (let i = 0; i < clips.length; i++) {
     const out = path.join(dir, `fixed_${i}.mp4`);
-
-    await execAsync(`
-      ffmpeg -y -i "${clipList[i]}" \
-      -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" \
-      -an -r 30 -c:v libx264 -preset veryfast -crf 22 "${out}"
-    `);
-
+    await execAsync(
+      `ffmpeg -y -i "${clips[i]}" -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" -r 30 -an -c:v libx264 "${out}"`
+    );
     fixed.push(out);
   }
 
-  update(jobId, { stage: "Concatenating", progress: 70 });
-  const list = fixed.map(f => `file '${f}'`).join("\n");
-  fs.writeFileSync(path.join(dir, "list.txt"), list);
-
+  // Concat
+  const list = path.join(dir, "list.txt");
+  fs.writeFileSync(list, fixed.map(f => `file '${f}'`).join("\n"));
   const merged = path.join(dir, "merged.mp4");
-  await execAsync(`ffmpeg -y -f concat -safe 0 -i "${dir}/list.txt" -c copy "${merged}"`);
+  await execAsync(`ffmpeg -y -f concat -safe 0 -i "${list}" -c copy "${merged}"`);
 
-  const subsPath = path.join(dir, "subs.srt");
-  fs.writeFileSync(subsPath, subtitles);
-
-  update(jobId, { stage: "Adding audio & subtitles", progress: 85 });
-
+  // Burn subtitles + add audio
   const final = path.join(dir, "final.mp4");
-  await execAsync(`
-    ffmpeg -y -i "${merged}" -i "${audioPath}" \
-    -vf "subtitles=${subsPath}" \
-    -map 0:v -map 1:a -shortest \
-    -c:v libx264 -preset veryfast -crf 22 -c:a aac "${final}"
-  `);
+  await execAsync(
+    `ffmpeg -y -i "${merged}" -i "${audioPath}" -vf "subtitles=${srtPath}:force_style='Fontsize=36,PrimaryColour=&Hffffff&'" -map 0:v -map 1:a -shortest -c:v libx264 -c:a aac "${final}"`
+  );
 
   update(jobId, {
     status: "done",
@@ -148,22 +160,21 @@ async function processJob(jobId, payload) {
   });
 }
 
-/* ===============================
-   DOWNLOAD HELPER
-================================*/
-async function download(url, out) {
+/* ---------------- DOWNLOAD ---------------- */
+
+async function download(url, output) {
   const r = await fetch(url);
-  if (!r.ok) throw new Error("Download failed");
-  const s = fs.createWriteStream(out);
+  if (!r.ok) throw new Error(`Download failed ${r.status}`);
+  const f = fs.createWriteStream(output);
   await new Promise((res, rej) => {
-    r.body.pipe(s);
+    r.body.pipe(f);
     r.body.on("error", rej);
-    s.on("finish", res);
+    f.on("finish", res);
   });
 }
 
-/* ===============================
-   START
-================================*/
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("🚀 Render server running on", PORT));
+/* ---------------- START ---------------- */
+
+app.listen(process.env.PORT || 3000, () => {
+  console.log("🚀 Remotion server ready");
+});
