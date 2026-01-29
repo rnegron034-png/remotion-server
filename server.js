@@ -214,96 +214,96 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 /* ---------------- SUBTITLE STYLES WITH KARAOKE ---------------- */
 
 const SUBTITLE_STYLES = {
-  // Karaoke styles with yellow highlight
+  // Karaoke styles - 40px centered
   karaoke: {
-    name: "Poppins 36px Karaoke (Yellow Highlight)",
+    name: "Poppins 40px Karaoke Center (Yellow Highlight)",
     useKaraoke: true,
     config: {
       fontname: "Poppins SemiBold",
-      fontsize: 36,
+      fontsize: 40,
       primaryColour: "&H00FFFFFF",      // White (unsung)
       secondaryColour: "&H0000FFFF",    // Yellow (sung) - BGR format
       outlineColour: "&H00000000",      // Black outline
       backColour: "&H00000000",         // Transparent background
       bold: 1,
       borderStyle: 1,
-      outline: 2,
-      shadow: 1,
-      alignment: 2,                     // Bottom center
-      marginV: 40,
+      outline: 3,
+      shadow: 2,
+      alignment: 5,                     // Center of screen
+      marginV: 0,
       spacing: -30
     }
   },
 
   karaokeOrange: {
-    name: "Poppins 36px Karaoke (Orange Highlight)",
+    name: "Poppins 40px Karaoke Center (Orange Highlight)",
     useKaraoke: true,
     config: {
       fontname: "Poppins SemiBold",
-      fontsize: 36,
+      fontsize: 40,
       primaryColour: "&H00FFFFFF",      // White (unsung)
       secondaryColour: "&H0000A5FF",    // Orange (sung)
       outlineColour: "&H00000000",
       backColour: "&H00000000",
       bold: 1,
       borderStyle: 1,
-      outline: 2,
-      shadow: 1,
-      alignment: 2,
-      marginV: 40,
+      outline: 3,
+      shadow: 2,
+      alignment: 5,
+      marginV: 0,
       spacing: -30
     }
   },
 
-  karaokeLarge: {
-    name: "Poppins 16px Karaoke (Yellow Highlight)",
+  karaokeBottom: {
+    name: "Poppins 40px Karaoke Bottom (Yellow Highlight)",
     useKaraoke: true,
     config: {
       fontname: "Poppins SemiBold",
-      fontsize: 16,
+      fontsize: 40,
       primaryColour: "&H00FFFFFF",
       secondaryColour: "&H0000FFFF",
       outlineColour: "&H00000000",
       backColour: "&H00000000",
       bold: 1,
       borderStyle: 1,
-      outline: 2,
-      shadow: 1,
-      alignment: 2,
-      marginV: 50,
+      outline: 3,
+      shadow: 2,
+      alignment: 2,                     // Bottom center
+      marginV: 80,
       spacing: -30
     }
   },
 
   // Original non-karaoke styles for compatibility
   default: {
-    name: "Poppins 36px (tracking -30)",
+    name: "Poppins 12px (tracking -30)",
     useKaraoke: false,
-    style: `Fontname=Poppins SemiBold,Fontsize=36,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=40,Spacing=-30`
+    style: `Fontname=Poppins SemiBold,Fontsize=12,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=40,Spacing=-30`
   },
 
   medium: {
-    name: "Poppins 42px (tracking -30)",
+    name: "Poppins 14px (tracking -30)",
     useKaraoke: false,
-    style: `Fontname=Poppins SemiBold,Fontsize=42,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=45,Spacing=-30`
+    style: `Fontname=Poppins SemiBold,Fontsize=14,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=45,Spacing=-30`
   },
 
   boxed: {
-    name: "Poppins 36px Boxed (tracking -30)",
+    name: "Poppins 12px Boxed (tracking -30)",
     useKaraoke: false,
-    style: `Fontname=Poppins SemiBold,Fontsize=36,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&HC0000000&,Bold=1,BorderStyle=4,Outline=1,Shadow=1,Alignment=2,MarginV=40,Spacing=-30`
+    style: `Fontname=Poppins SemiBold,Fontsize=12,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&HC0000000&,Bold=1,BorderStyle=4,Outline=1,Shadow=1,Alignment=2,MarginV=40,Spacing=-30`
   },
 
   bold: {
-    name: "Poppins Bold 36px (tracking -30)",
+    name: "Poppins Bold 12px (tracking -30)",
     useKaraoke: false,
-    style: `Fontname=Poppins Bold,Fontsize=36,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=40,Spacing=-30`
+    style: `Fontname=Poppins Bold,Fontsize=12,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=40,Spacing=-30`
   },
 
   regular: {
-    name: "Poppins Regular 36px (tracking -30)",
+    name: "Poppins Regular 12px (tracking -30)",
     useKaraoke: false,
-    style: `Fontname=Poppins,Fontsize=36,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=0,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=40,Spacing=-30`
+    style: `Fontname=Poppins,Fontsize=12,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=0,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=40,Spacing=-30`
   },
 
   large: {
@@ -313,15 +313,15 @@ const SUBTITLE_STYLES = {
   },
 
   highlight: {
-    name: "Poppins 36px Yellow (tracking -30)",
+    name: "Poppins 12px Yellow (tracking -30)",
     useKaraoke: false,
-    style: `Fontname=Poppins SemiBold,Fontsize=36,PrimaryColour=&H000000&,OutlineColour=&H000000&,BackColour=&H00FFFF&,Bold=1,BorderStyle=4,Outline=1,Shadow=0,Alignment=2,MarginV=40,Spacing=-30`
+    style: `Fontname=Poppins SemiBold,Fontsize=12,PrimaryColour=&H000000&,OutlineColour=&H000000&,BackColour=&H00FFFF&,Bold=1,BorderStyle=4,Outline=1,Shadow=0,Alignment=2,MarginV=40,Spacing=-30`
   },
 
   extraTight: {
-    name: "Poppins 36px (tracking -40)",
+    name: "Poppins 12px (tracking -40)",
     useKaraoke: false,
-    style: `Fontname=Poppins SemiBold,Fontsize=36,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=40,Spacing=-40`
+    style: `Fontname=Poppins SemiBold,Fontsize=12,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=40,Spacing=-40`
   }
 };
 
@@ -536,7 +536,7 @@ async function download(url, output) {
 app.listen(process.env.PORT || 3000, () => {
   console.log("🚀 Remotion server ready!");
   console.log("🎤 Karaoke word-highlighting enabled!");
-  console.log("📝 Default: Poppins SemiBold, 36px");
+  console.log("📝 Default: Poppins SemiBold, 40px CENTERED");
   console.log("💛 Highlight: Yellow karaoke effect");
   console.log("📏 Letter spacing: -30 (tight tracking)");
   console.log(`🧹 Cleanup: Before each job (keep ${CLEANUP_CONFIG.keepCompletedJobs} recent)`);
