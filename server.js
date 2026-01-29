@@ -65,7 +65,7 @@ PlayResY=1920
 
 [V4+ Styles]
 Format=Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style=Default,Poppins SemiBold,12,&H00FFFFFF,&H0000FFFF,&H00000000,&H00000000,1,0,0,0,100,100,-30,0,1,2,1,2,40,40,60,1
+Style=Default,Poppins SemiBold,36,&H00FFFFFF,&H0000FFFF,&H00000000,&H00000000,1,0,0,0,100,100,-30,0,1,2,1,2,40,40,60,1
 
 [Events]
 Format=Layer,Start,End,Style,Text
