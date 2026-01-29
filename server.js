@@ -133,84 +133,70 @@ function toSrtTime(t) {
   return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")},${String(ms).padStart(3,"0")}`;
 }
 
-// IMPROVED: Smart word-per-word subtitle generation
 function subtitlesToSrt(subs) {
   return subs.map((s, i) => {
-    // Limit words per line for better readability (3-5 words max)
-    let text = s.text;
-    const words = text.split(' ');
-    
-    // If too many words, split into multiple lines (max 3-5 words per line)
-    if (words.length > 5) {
-      const lines = [];
-      for (let i = 0; i < words.length; i += 4) {
-        lines.push(words.slice(i, i + 4).join(' '));
-      }
-      text = lines.join('\\N'); // \N creates new line in SRT
-    }
-    
     return `${i+1}
 ${toSrtTime(s.start)} --> ${toSrtTime(s.end)}
-${text}
+${s.text}
 
 `;
   }).join("");
 }
 
-/* ---------------- OPTIMIZED SUBTITLE STYLES FOR 9:16 VIDEOS ---------------- */
+/* ---------------- PROPERLY SIZED SUBTITLE STYLES (18PX BASE) ---------------- */
 
 const SUBTITLE_STYLES = {
-  // 🔥 VIRAL - TikTok/Instagram Reels Style (BEST FOR ENGAGEMENT)
-  viral: {
-    name: "Viral",
-    style: `Fontname=Impact,Fontsize=70,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=6,Shadow=3,Alignment=2,MarginV=180`
+  // Clean & Readable - Perfect 18px size
+  default: {
+    name: "Default (18px)",
+    style: `Fontname=Arial Bold,Fontsize=18,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=50`
   },
 
-  // 🎯 MODERN - Clean Bold Style (RECOMMENDED)
-  modern: {
-    name: "Modern",
-    style: `Fontname=Arial Black,Fontsize=65,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=5,Shadow=2,Alignment=2,MarginV=200`
+  // Slightly larger for better visibility - 22px
+  medium: {
+    name: "Medium (22px)",
+    style: `Fontname=Arial Bold,Fontsize=22,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=60`
   },
 
-  // 💛 HIGHLIGHT - Yellow Background Box (ATTENTION GRABBING)
+  // Standard subtitle size - 24px
+  standard: {
+    name: "Standard (24px)",
+    style: `Fontname=Arial Bold,Fontsize=24,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=70`
+  },
+
+  // With background box for better readability - 18px
+  boxed: {
+    name: "Boxed (18px)",
+    style: `Fontname=Arial Bold,Fontsize=18,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&HC0000000&,Bold=1,BorderStyle=4,Outline=1,Shadow=1,Alignment=2,MarginV=50`
+  },
+
+  // Yellow highlight style - 20px
   highlight: {
-    name: "Highlight",
-    style: `Fontname=Arial Black,Fontsize=68,PrimaryColour=&H000000&,OutlineColour=&H000000&,BackColour=&H00FFFF&,Bold=1,BorderStyle=4,Outline=2,Shadow=0,Alignment=2,MarginV=200`
+    name: "Highlight (20px)",
+    style: `Fontname=Arial Black,Fontsize=20,PrimaryColour=&H000000&,OutlineColour=&H000000&,BackColour=&H00FFFF&,Bold=1,BorderStyle=4,Outline=1,Shadow=0,Alignment=2,MarginV=60`
   },
 
-  // 🌈 NEON - Colorful Glow (FOR ENERGETIC CONTENT)
-  neon: {
-    name: "Neon",
-    style: `Fontname=Impact,Fontsize=72,PrimaryColour=&H00FFFF&,OutlineColour=&HFF00FF&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=6,Shadow=0,Alignment=2,MarginV=180`
-  },
-
-  // 📦 BOX - Black Background Box (HIGH CONTRAST)
-  box: {
-    name: "Box",
-    style: `Fontname=Arial Black,Fontsize=66,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&HD0000000&,Bold=1,BorderStyle=4,Outline=3,Shadow=2,Alignment=2,MarginV=200`
-  },
-
-  // 🎬 CINEMATIC - Professional Style
-  cinematic: {
-    name: "Cinematic",
-    style: `Fontname=Arial,Fontsize=60,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H96000000&,Bold=1,BorderStyle=4,Outline=2,Shadow=1,Alignment=2,MarginV=150`
-  },
-
-  // 🎮 GAMING - Bold Green (FOR GAMING CONTENT)
-  gaming: {
-    name: "Gaming",
-    style: `Fontname=Impact,Fontsize=70,PrimaryColour=&H00FF00&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=6,Shadow=3,Alignment=2,MarginV=180`
-  },
-
-  // ⚡ MINIMAL - Simple & Clean
+  // Minimal clean - 18px
   minimal: {
-    name: "Minimal",
-    style: `Fontname=Arial,Fontsize=62,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=4,Shadow=1,Alignment=2,MarginV=160`
+    name: "Minimal (18px)",
+    style: `Fontname=Arial,Fontsize=18,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=0,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=50`
+  },
+
+  // Professional style - 20px
+  professional: {
+    name: "Professional (20px)",
+    style: `Fontname=Arial Bold,Fontsize=20,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H96000000&,Bold=1,BorderStyle=4,Outline=1,Shadow=1,Alignment=2,MarginV=60`
+  },
+
+  // Bold for emphasis - 26px
+  bold: {
+    name: "Bold (26px)",
+    style: `Fontname=Arial Black,Fontsize=26,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=3,Shadow=2,Alignment=2,MarginV=80`
   }
 };
 
-// DEFAULT: Use VIRAL style (best for engagement)
-const DEFAULT_STYLE = SUBTITLE_STYLES.viral.style;
+// DEFAULT: 18px clean style
+const DEFAULT_STYLE = SUBTITLE_STYLES.default.style;
 
 /* ---------------- API ---------------- */
 
@@ -308,13 +294,12 @@ app.get("/stats", (req, res) => {
   res.json(stats);
 });
 
-// NEW: Get available subtitle styles
 app.get("/subtitle-styles", (req, res) => {
   const styles = Object.entries(SUBTITLE_STYLES).map(([key, value]) => ({
     id: key,
     name: value.name
   }));
-  res.json({ styles, default: 'viral' });
+  res.json({ styles, default: 'default' });
 });
 
 /* ---------------- JOB PIPELINE ---------------- */
@@ -325,7 +310,7 @@ async function processJob(jobId, payload) {
   const audioUrl = payload.client_payload.audio.src;
   const subtitles = payload.client_payload.subtitles || [];
 
-  // Get style from payload or use default
+  // Get style from payload or use default (18px)
   let subtitleStyle = DEFAULT_STYLE;
   
   if (payload.client_payload.subtitleStyle) {
@@ -345,7 +330,7 @@ async function processJob(jobId, payload) {
   const audioPath = path.join(dir, "audio.mp3");
   await download(audioUrl, audioPath);
 
-  // Write subtitles with smart formatting
+  // Write subtitles
   const srtPath = path.join(dir, "subs.srt");
   fs.writeFileSync(srtPath, subtitlesToSrt(subtitles));
 
@@ -418,7 +403,6 @@ async function download(url, output) {
 
 app.listen(process.env.PORT || 3000, () => {
   console.log("🚀 Remotion server ready!");
-  console.log("📱 Optimized for viral 9:16 videos");
-  console.log("🎬 Default style: VIRAL (best for engagement)");
+  console.log("📝 Subtitle size: 18px (default) - Clean & Readable");
   console.log(`🧹 Cleanup: Before each job (keep ${CLEANUP_CONFIG.keepCompletedJobs} recent)`);
 });
