@@ -52,6 +52,37 @@ ${s.text}
   }).join("");
 }
 
+/* ---------------- SUBTITLE STYLE PRESETS ---------------- */
+
+const SUBTITLE_STYLES = {
+  // Modern TikTok/Instagram Reels style - RECOMMENDED
+  modern: `Fontname=Montserrat ExtraBold,Fontsize=48,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H80000000&,Bold=1,Italic=0,BorderStyle=1,Outline=3,Shadow=2,Alignment=2,MarginV=80`,
+  
+  // Bold with yellow highlight (like many viral videos)
+  viral: `Fontname=Arial Black,Fontsize=52,PrimaryColour=&H00FFFF&,OutlineColour=&H000000&,BackColour=&H80000000&,Bold=1,Italic=0,BorderStyle=3,Outline=4,Shadow=3,Alignment=2,MarginV=80`,
+  
+  // Clean Netflix style
+  netflix: `Fontname=Netflix Sans,Fontsize=44,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H96000000&,Bold=0,Italic=0,BorderStyle=4,Outline=0,Shadow=0,Alignment=2,MarginV=60`,
+  
+  // Neon glow effect
+  neon: `Fontname=Impact,Fontsize=50,PrimaryColour=&H00FFFF&,OutlineColour=&HFF00FF&,BackColour=&H80000000&,Bold=1,Italic=0,BorderStyle=1,Outline=4,Shadow=0,Alignment=2,MarginV=80`,
+  
+  // Professional with box background
+  professional: `Fontname=Helvetica Neue Bold,Fontsize=46,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&HC8000000&,Bold=1,Italic=0,BorderStyle=4,Outline=2,Shadow=2,Alignment=2,MarginV=70`,
+  
+  // Minimalist clean
+  minimal: `Fontname=Roboto Bold,Fontsize=42,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,Italic=0,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=60`,
+  
+  // Gaming/YouTube style
+  gaming: `Fontname=Anton,Fontsize=54,PrimaryColour=&H00FF00&,OutlineColour=&H000000&,BackColour=&H80000000&,Bold=1,Italic=0,BorderStyle=1,Outline=5,Shadow=3,Alignment=2,MarginV=90`,
+  
+  // Elegant serif
+  elegant: `Fontname=Playfair Display Bold,Fontsize=44,PrimaryColour=&HFFFFFF&,OutlineColour=&H1A1A1A&,BackColour=&HA0000000&,Bold=1,Italic=0,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=70`
+};
+
+// You can change this to any style above
+const DEFAULT_STYLE = SUBTITLE_STYLES.modern;
+
 /* ---------------- API ---------------- */
 
 app.post("/remotion-render", async (req, res) => {
@@ -109,15 +140,18 @@ async function processJob(jobId, payload) {
   const audioUrl = payload.client_payload.audio.src;
   const subtitles = payload.client_payload.subtitles || [];
 
+  // Get custom style from payload or use default
+  const subtitleStyle = payload.client_payload.subtitleStyle || DEFAULT_STYLE;
+
   update(jobId, { status: "downloading", stage: "Downloading", progress: 5 });
 
   // Download audio
   const audioPath = path.join(dir, "audio.mp3");
   await download(audioUrl, audioPath);
 
-  // Write subtitles correctly
+  // Write subtitles
   const srtPath = path.join(dir, "subs.srt");
-  fs.writeFileSync(srtPath, subtitlesToSrt(subtitles));   // << FIXED
+  fs.writeFileSync(srtPath, subtitlesToSrt(subtitles));
 
   // Download clips
   const clips = [];
@@ -144,10 +178,14 @@ async function processJob(jobId, payload) {
   const merged = path.join(dir, "merged.mp4");
   await execAsync(`ffmpeg -y -f concat -safe 0 -i "${list}" -c copy "${merged}"`);
 
-  // Burn subtitles + add audio
+  // Burn subtitles + add audio with improved styling
   const final = path.join(dir, "final.mp4");
+  
+  // Escape the SRT path for FFmpeg
+  const escapedSrtPath = srtPath.replace(/\\/g, '\\\\').replace(/:/g, '\\:');
+  
   await execAsync(
-    `ffmpeg -y -i "${merged}" -i "${audioPath}" -vf "subtitles=${srtPath}:force_style='Fontsize=36,PrimaryColour=&Hffffff&'" -map 0:v -map 1:a -shortest -c:v libx264 -c:a aac "${final}"`
+    `ffmpeg -y -i "${merged}" -i "${audioPath}" -vf "subtitles='${escapedSrtPath}':force_style='${subtitleStyle}'" -map 0:v -map 1:a -shortest -c:v libx264 -preset medium -crf 23 -c:a aac -b:a 192k "${final}"`
   );
 
   update(jobId, {
@@ -176,5 +214,5 @@ async function download(url, output) {
 /* ---------------- START ---------------- */
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 Remotion server ready");
+  console.log("🚀 Remotion server ready with improved subtitles!");
 });
