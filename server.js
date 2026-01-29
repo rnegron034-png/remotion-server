@@ -1,118 +1,171 @@
-import express from 'express';
-import { bundle } from '@remotion/bundler';
-import { renderMedia, selectComposition } from '@remotion/renderer';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
-import fs from 'fs';
-import path from 'path';
-import https from 'https';
-import { fileURLToPath } from 'url';
+import express from "express";
+import cors from "cors";
+import fs from "fs/promises";
+import fsSync from "fs";
+import path from "path";
+import crypto from "crypto";
+import { exec } from "child_process";
+import { fileURLToPath } from "url";
+import PQueue from "p-queue";
 
-const exec = promisify(execFile);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+app.use(cors());
+app.use(express.json({ limit: "300mb" }));
+
+const PORT = process.env.PORT || 3000;
+
+/* -------------------- GLOBAL STATE -------------------- */
+
 const jobs = new Map();
-app.use(express.json({ limit: '50mb' }));
+const queue = new PQueue({ concurrency: 2 }); // only 2 renders at a time (Railway safe)
 
-app.get('/health', (_, res) => res.send('OK'));
+/* -------------------- UTILS -------------------- */
 
-app.post('/remotion-render', (req, res) => {
-  const { scenes, subtitles = [] } = req.body;
-  const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2,7)}`;
-
-  jobs.set(jobId, {
-    jobId,
-    status: 'queued',
-    progress: 0,
-    output: null,
+function execP(cmd) {
+  return new Promise((res, rej) => {
+    exec(cmd, { maxBuffer: 1024 * 1024 * 50 }, (err, stdout, stderr) => {
+      if (err) {
+        console.error(cmd);
+        console.error(stderr);
+        return rej(stderr || err);
+      }
+      res(stdout);
+    });
   });
+}
 
-  res.json({ jobId, statusUrl: `/status/${jobId}`, downloadUrl: `/download/${jobId}` });
+async function ensureDir(p) {
+  await fs.mkdir(p, { recursive: true });
+}
 
-  run(jobId, scenes, subtitles);
-});
+function update(jobId, data) {
+  jobs.set(jobId, { ...jobs.get(jobId), ...data });
+}
 
-app.get('/status/:jobId', (req, res) => {
-  const job = jobs.get(req.params.jobId);
+/* -------------------- STATUS -------------------- */
+
+app.get("/status/:id", (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: "Not found" });
   res.json(job);
 });
 
-app.get('/download/:jobId', (req, res) => {
-  const job = jobs.get(req.params.jobId);
-  res.download(job.output);
+/* -------------------- START RENDER -------------------- */
+
+app.post("/remotion-render", async (req, res) => {
+  try {
+    const payload = req.body?.client_payload ?? req.body;
+    const { scenes, audio, subtitles, title } = payload;
+
+    if (!Array.isArray(scenes) || !scenes.length) throw new Error("Scenes missing");
+    if (!audio?.src) throw new Error("Audio missing");
+    if (!Array.isArray(subtitles)) throw new Error("Subtitles missing");
+
+    const jobId = crypto.randomUUID();
+    jobs.set(jobId, {
+      status: "queued",
+      progress: 0,
+      title
+    });
+
+    res.json({ jobId });
+
+    queue.add(() => renderJob(jobId, scenes, audio.src, subtitles, title));
+
+  } catch (e) {
+    res.status(400).json({ error: e.message, body: req.body });
+  }
 });
 
-/* Download helper */
-function download(url, dest) {
-  return new Promise((resolve) => {
-    const file = fs.createWriteStream(dest);
-    https.get(url, res => res.pipe(file).on('finish', () => file.close(resolve)));
-  });
-}
+/* -------------------- CORE PIPELINE -------------------- */
 
-async function run(jobId, scenes, subtitles) {
-  const job = jobs.get(jobId);
-  const tmp = '/tmp';
+async function renderJob(jobId, scenes, audioUrl, subtitles, title) {
+  try {
+    update(jobId, { status: "downloading" });
 
-  const bundleLoc = await bundle({ entryPoint: path.join(__dirname, 'src/index.jsx') });
-  const merged = [];
+    const work = `/tmp/${jobId}`;
+    const clipsDir = `${work}/clips`;
+    await ensureDir(clipsDir);
 
-  for (let i = 0; i < scenes.length; i++) {
-    job.progress = i / scenes.length;
+    /* -------- PARALLEL CLIP DOWNLOAD + REPAIR -------- */
 
-    const bunny = `${tmp}/${jobId}_video_${i}.mp4`;
-    const audio = `${tmp}/${jobId}_audio_${i}.mp3`;
-    const subs = `${tmp}/${jobId}_subs_${i}.mp4`;
+    await Promise.all(
+      scenes.map((s, i) =>
+        execP(
+          `ffmpeg -y -err_detect ignore_err -i "${s.src}" -map 0:v:0 -map 0:a? -c:v copy -c:a copy ${clipsDir}/${i}.mp4`
+        ).then(() => {
+          update(jobId, { progress: (i + 1) / scenes.length * 30 });
+        })
+      )
+    );
 
-    await download(scenes[i].src, bunny);
-    await download(scenes[i].audio, audio);
+    /* -------- CONCAT -------- */
 
-    const comp = await selectComposition({
-      serveUrl: bundleLoc,
-      id: 'VideoComposition',
-      inputProps: { subtitles },
-      durationInFrames: scenes[i].durationInFrames,
+    update(jobId, { status: "concat" });
+
+    const list = scenes.map((_, i) => `file '${clipsDir}/${i}.mp4'`).join("\n");
+    await fs.writeFile(`${work}/list.txt`, list);
+
+    await execP(`ffmpeg -y -f concat -safe 0 -i ${work}/list.txt -c copy ${work}/video.mp4`);
+
+    /* -------- AUDIO -------- */
+
+    update(jobId, { status: "audio" });
+
+    await execP(`ffmpeg -y -i "${audioUrl}" ${work}/audio.mp3`);
+
+    /* -------- SUBTITLES (SRT) -------- */
+
+    let srt = subtitles
+      .map(
+        (s, i) =>
+          `${i + 1}\n${secToSrt(s.start)} --> ${secToSrt(s.end)}\n${s.text}\n`
+      )
+      .join("\n");
+
+    await fs.writeFile(`${work}/subs.srt`, srt);
+
+    /* -------- FINAL MUX -------- */
+
+    update(jobId, { status: "mux" });
+
+    await execP(
+      `ffmpeg -y -i ${work}/video.mp4 -i ${work}/audio.mp3 -vf subtitles=${work}/subs.srt -map 0:v -map 1:a -c:a copy ${work}/final.mp4`
+    );
+
+    update(jobId, {
+      status: "done",
+      progress: 100,
+      url: `/download/${jobId}`
     });
 
-    await renderMedia({
-      composition: comp,
-      serveUrl: bundleLoc,
-      codec: 'h264',
-      pixelFormat: 'yuva420p',
-      outputLocation: subs,
-      inputProps: { subtitles },
-    });
-
-    const mergedOut = `${tmp}/${jobId}_merged_${i}.mp4`;
-
-    await exec('ffmpeg', [
-      '-y',
-      '-i', bunny,
-      '-i', subs,
-      '-i', audio,
-      '-filter_complex', 'overlay',
-      '-map', '0:v',
-      '-map', '2:a',
-      '-c:v', 'libx264',
-      '-c:a', 'aac',
-      '-shortest',
-      mergedOut,
-    ]);
-
-    merged.push(mergedOut);
+  } catch (e) {
+    console.error(e);
+    update(jobId, { status: "failed", error: e.toString() });
   }
-
-  const list = `${tmp}/${jobId}_list.txt`;
-  fs.writeFileSync(list, merged.map(f => `file '${f}'`).join('\n'));
-
-  const final = `${tmp}/${jobId}_final.mp4`;
-  await exec('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', final]);
-
-  job.status = 'completed';
-  job.progress = 1;
-  job.output = final;
 }
 
-app.listen(3000);
+/* -------------------- DOWNLOAD -------------------- */
+
+app.get("/download/:id", (req, res) => {
+  const f = `/tmp/${req.params.id}/final.mp4`;
+  if (!fsSync.existsSync(f)) return res.status(404).send("Not ready");
+  res.sendFile(f);
+});
+
+/* -------------------- TIME UTILS -------------------- */
+
+function secToSrt(s) {
+  const ms = Math.floor((s % 1) * 1000);
+  const t = new Date(s * 1000).toISOString().substr(11, 8);
+  return `${t},${String(ms).padStart(3, "0")}`;
+}
+
+/* -------------------- START -------------------- */
+
+app.listen(PORT, () => {
+  console.log("🚀 Remotion Render Server running on", PORT);
+});
