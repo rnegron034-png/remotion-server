@@ -5,9 +5,6 @@ import fetch from "node-fetch";
 import { exec } from "child_process";
 import fs from "fs";
 import path from "path";
-import { promisify } from "util";
-
-const execAsync = promisify(exec);
 
 const app = express();
 app.use(cors());
@@ -17,286 +14,185 @@ const jobs = new Map();
 const WORKDIR = "/tmp/jobs";
 fs.mkdirSync(WORKDIR, { recursive: true });
 
-function jobPath(id) {
-  return path.join(WORKDIR, id);
-}
+const execAsync = (cmd) =>
+  new Promise((resolve, reject) => {
+    exec(cmd, (err, stdout, stderr) => {
+      if (err) reject(stderr || err);
+      else resolve(stdout);
+    });
+  });
 
-function updateJobProgress(jobId, updates) {
+const jobPath = (id) => path.join(WORKDIR, id);
+
+const updateJob = (jobId, updates) => {
   const job = jobs.get(jobId);
-  if (job) {
-    jobs.set(jobId, { ...job, ...updates, lastUpdated: new Date().toISOString() });
-  }
-}
-
-/* ============================
-   POST /remotion-render
-============================ */
-app.post("/remotion-render", async (req, res) => {
-  const payload = req.body;
-
-  if (!payload?.client_payload?.scenes?.length) {
-    return res.status(400).json({ error: "Scenes missing" });
-  }
-  if (!payload?.client_payload?.audio?.src) {
-    return res.status(400).json({ error: "Audio URL missing" });
-  }
-
-  const jobId = uuidv4();
-  const dir = jobPath(jobId);
-  fs.mkdirSync(dir, { recursive: true });
-
+  if (!job) return;
   jobs.set(jobId, {
-    jobId,
-    status: "queued",
-    progress: 0,
-    stage: "Queued",
-    totalScenes: payload.client_payload.scenes.length,
-    processedScenes: 0,
-    startTime: new Date().toISOString(),
+    ...job,
+    ...updates,
     lastUpdated: new Date().toISOString(),
-    downloadUrl: null,
-    error: null
   });
+};
 
-  res.json({
-    jobId,
-    status: "queued",
-    statusUrl: `/status/${jobId}`
-  });
+/* ===============================
+   POST /remotion-render
+================================*/
+app.post("/remotion-render", async (req, res) => {
+  try {
+    const payload = req.body;
 
-  processJob(jobId, payload).catch(err => {
-    updateJobProgress(jobId, { status: "error", stage: "Failed", error: String(err) });
-  });
+    if (!payload?.client_payload?.scenes?.length)
+      return res.status(400).json({ error: "Scenes missing" });
+
+    if (!payload?.client_payload?.audio?.src)
+      return res.status(400).json({ error: "Audio missing" });
+
+    if (!payload?.client_payload?.subtitles)
+      return res.status(400).json({ error: "Subtitles missing" });
+
+    const jobId = uuidv4();
+    const dir = jobPath(jobId);
+    fs.mkdirSync(dir, { recursive: true });
+
+    jobs.set(jobId, {
+      jobId,
+      status: "queued",
+      stage: "Queued",
+      progress: 0,
+      totalScenes: payload.client_payload.scenes.length,
+      processedScenes: 0,
+      startTime: new Date().toISOString(),
+      lastUpdated: new Date().toISOString(),
+      downloadUrl: null,
+      error: null,
+    });
+
+    res.json({
+      jobId,
+      status: "queued",
+      statusUrl: `/status/${jobId}`,
+      downloadUrl: `/download/${jobId}`,
+    });
+
+    processJob(jobId, payload).catch((e) => {
+      updateJob(jobId, {
+        status: "error",
+        stage: "Failed",
+        error: String(e),
+      });
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-/* ============================
+/* ===============================
    STATUS
-============================ */
+================================*/
 app.get("/status/:jobId", (req, res) => {
   const job = jobs.get(req.params.jobId);
   if (!job) return res.status(404).json({ error: "Not found" });
   res.json(job);
 });
 
+/* ===============================
+   DOWNLOAD
+================================*/
 app.get("/download/:jobId", (req, res) => {
   const job = jobs.get(req.params.jobId);
   if (!job || job.status !== "done") return res.status(404).json({ error: "Not ready" });
   res.download(job.outputFile);
 });
 
-/* ============================
-   PIPELINE
-============================ */
+/* ===============================
+   JOB PIPELINE
+================================*/
 async function processJob(jobId, payload) {
   const dir = jobPath(jobId);
   const scenes = payload.client_payload.scenes;
   const audioUrl = payload.client_payload.audio.src;
-  const srtUrl = payload.client_payload.subtitles?.src;
+  const subtitles = payload.client_payload.subtitles;
 
-  updateJobProgress(jobId, { stage: "Downloading audio", progress: 5 });
+  updateJob(jobId, { status: "downloading", stage: "Downloading", progress: 5 });
 
+  // Download audio
   const audioPath = path.join(dir, "audio.mp3");
   await download(audioUrl, audioPath);
-  await validateMedia(audioPath, "audio");
 
-  let srtPath = null;
-  if (srtUrl) {
-    updateJobProgress(jobId, { stage: "Downloading subtitles", progress: 8 });
-    srtPath = path.join(dir, "subs.srt");
-    await download(srtUrl, srtPath);
-    // Validate SRT roughly
-    const srtContent = fs.readFileSync(srtPath, 'utf8');
-    if (!srtContent.trim().startsWith('1')) {
-      throw new Error('Invalid SRT file');
-    }
-  }
+  // Save subtitles
+  const srtPath = path.join(dir, "subs.srt");
+  fs.writeFileSync(srtPath, subtitles.map((s, i) => {
+    const fmt = (t) => new Date(t * 1000).toISOString().substr(11, 12).replace(".", ",");
+    return `${i+1}\n${fmt(s.start)} --> ${fmt(s.end)}\n${s.text}\n`;
+  }).join("\n"));
 
-  const clipPaths = [];
-
+  // Download clips
+  const clips = [];
   for (let i = 0; i < scenes.length; i++) {
-    updateJobProgress(jobId, {
-      stage: `Downloading clip ${i + 1}/${scenes.length}`,
-      processedScenes: i,
-      progress: 10 + (i / scenes.length) * 20
-    });
-
     const p = path.join(dir, `clip_${i}.mp4`);
     await download(scenes[i].src, p);
-    await validateMedia(p, "video");
-    clipPaths.push(p);
+    clips.push(p);
+    updateJob(jobId, { processedScenes: i+1, progress: 10 + (i/scenes.length)*30 });
   }
 
-  /* Normalize clips (NO AUDIO) */
-  updateJobProgress(jobId, { stage: "Normalizing clips", progress: 40 });
-
+  // Normalize clips
   const fixed = [];
-  for (let i = 0; i < clipPaths.length; i++) {
-    updateJobProgress(jobId, {
-      stage: `Normalizing clip ${i + 1}/${clipPaths.length}`,
-      progress: 40 + (i / clipPaths.length) * 25
-    });
+  for (let i = 0; i < clips.length; i++) {
     const out = path.join(dir, `fixed_${i}.mp4`);
-
-    const cmd = `ffmpeg -y -i "${clipPaths[i]}" -an -r 30 -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -pix_fmt yuv420p -c:v libx264 -preset ultrafast "${out}"`;
-    console.log(`Executing: ${cmd}`);
-    try {
-      const { stdout, stderr } = await execAsync(cmd, { maxBuffer: 1024 * 1024 * 50 });
-      console.log(`Normalize stdout: ${stdout}`);
-      console.log(`Normalize stderr: ${stderr}`);
-    } catch (err) {
-      console.error(`FFmpeg normalize error: ${err}`);
-      throw new Error(`FFmpeg normalize failed for clip ${i}: ${err}`);
-    }
-    await validateMedia(out, "video");
+    await execAsync(`ffmpeg -y -i "${clips[i]}" -r 30 -c:v libx264 -pix_fmt yuv420p "${out}"`);
     fixed.push(out);
   }
 
-  /* Concat */
-  updateJobProgress(jobId, { stage: "Merging clips", progress: 65 });
-
+  // Concat
   const list = fixed.map(f => `file '${f}'`).join("\n");
-  const listFile = path.join(dir, "list.txt");
-  fs.writeFileSync(listFile, list);
+  fs.writeFileSync(path.join(dir, "list.txt"), list);
 
   const merged = path.join(dir, "merged.mp4");
-  const concatCmd = `ffmpeg -y -f concat -safe 0 -i "${listFile}" -c:v copy "${merged}"`;
-  console.log(`Executing: ${concatCmd}`);
-  try {
-    const { stdout, stderr } = await execAsync(concatCmd, { maxBuffer: 1024 * 1024 * 50 });
-    console.log(`Concat stdout: ${stdout}`);
-    console.log(`Concat stderr: ${stderr}`);
-  } catch (err) {
-    console.error(`FFmpeg concat error: ${err}`);
-    throw new Error(`FFmpeg concat failed: ${err}`);
-  }
+  await execAsync(`ffmpeg -y -f concat -safe 0 -i "${path.join(dir,"list.txt")}" -c copy "${merged}"`);
 
-  /* Add Audio + Subtitles */
-  updateJobProgress(jobId, { stage: "Adding audio & subtitles", progress: 85 });
+  updateJob(jobId, { stage: "Rendering", progress: 80 });
 
+  // 🔥 FINAL RENDER (9:16 + subtitles + audio locked)
   const final = path.join(dir, "final.mp4");
 
-  let cmd;
-  if (srtPath) {
-    cmd = `ffmpeg -y -i "${merged}" -i "${audioPath}" -vf "subtitles='${srtPath.replace(/\\/g, '\\\\').replace(/:/g, '\\:')}'" -map 0:v -map 1:a -c:v libx264 -preset ultrafast -c:a aac -shortest "${final}"`;
-  } else {
-    cmd = `ffmpeg -y -i "${merged}" -i "${audioPath}" -map 0:v -map 1:a -c:v copy -c:a aac -shortest "${final}"`;
-  }
-  console.log(`Executing: ${cmd}`);
-  try {
-    const { stdout, stderr } = await execAsync(cmd, { maxBuffer: 1024 * 1024 * 50 });
-    console.log(`Final mux stdout: ${stdout}`);
-    console.log(`Final mux stderr: ${stderr}`);
-  } catch (err) {
-    console.error(`FFmpeg final mux error: ${err}`);
-    throw new Error(`FFmpeg final mux failed: ${err}`);
-  }
+  await execAsync(
+    `ffmpeg -y -i "${merged}" -i "${audioPath}" \
+    -vf "crop=ih*9/16:ih:(iw-ih*9/16)/2:0,subtitles=${srtPath}" \
+    -map 0:v -map 1:a \
+    -c:v libx264 -preset veryfast -crf 23 \
+    -c:a aac -shortest "${final}"`
+  );
 
-  updateJobProgress(jobId, {
+  updateJob(jobId, {
     status: "done",
     stage: "Complete",
     progress: 100,
     outputFile: final,
-    downloadUrl: `/download/${jobId}`
+    downloadUrl: `/download/${jobId}`,
   });
 }
 
-/* ============================
+/* ===============================
    Downloader
-============================ */
+================================*/
 async function download(url, output) {
-  let fileId = getGoogleDriveFileId(url);
-  if (fileId) {
-    return downloadFromGoogleDrive(fileId, output);
-  } else {
-    return downloadDirect(url, output);
-  }
-}
-
-function getGoogleDriveFileId(url) {
-  if (!url.includes('drive.google.com') && !url.includes('googleusercontent.com')) {
-    return null;
-  }
-  let fileId;
-  if (url.includes('/file/d/')) {
-    fileId = url.split('/file/d/')[1].split('/')[0];
-  } else if (url.includes('id=')) {
-    const u = new URL(url);
-    fileId = u.searchParams.get('id');
-  } else if (url.includes('/open?id=')) {
-    const u = new URL(url);
-    fileId = u.searchParams.get('id');
-  }
-  return fileId;
-}
-
-async function downloadFromGoogleDrive(fileId, output) {
-  let url = `https://drive.google.com/uc?export=download&id=${fileId}`;
-  let res = await fetch(url, { redirect: 'manual' });
-
-  if (res.status >= 300 && res.status < 400) {
-    // Handle redirect if any
-    url = res.headers.get('location');
-    res = await fetch(url);
-  }
-
-  const contentType = res.headers.get('content-type');
-  if (contentType && contentType.includes('text/html')) {
-    const text = await res.text();
-    const match = text.match(/confirm=([0-9A-Za-z_-]+)&/i);
-    if (match) {
-      const confirm = match[1];
-      url = `https://drive.google.com/uc?export=download&confirm=${confirm}&id=${fileId}`;
-      res = await fetch(url);
-    } else {
-      throw new Error('Could not find confirm token for Google Drive download');
-    }
-  }
-
-  if (!res.ok) throw new Error(`Download failed: ${res.statusText}`);
-
-  const stream = fs.createWriteStream(output);
-  await new Promise((resolve, reject) => {
-    res.body.pipe(stream);
-    res.body.on("error", reject);
-    stream.on("finish", resolve);
-  });
-}
-
-async function downloadDirect(url, output) {
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Download failed: ${res.statusText}`);
-  const stream = fs.createWriteStream(output);
-  await new Promise((resolve, reject) => {
-    res.body.pipe(stream);
-    res.body.on("error", reject);
-    stream.on("finish", resolve);
+  if (!res.ok) throw new Error("Download failed");
+  const file = fs.createWriteStream(output);
+  await new Promise((r, j) => {
+    res.body.pipe(file);
+    res.body.on("error", j);
+    file.on("finish", r);
   });
 }
 
-/* ============================
-   Validator
-============================ */
-async function validateMedia(filePath, type) {
-  let cmd = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`;
-  console.log(`Executing: ${cmd}`);
-  try {
-    const { stdout, stderr } = await execAsync(cmd);
-    console.log(`Validate stdout: ${stdout}`);
-    console.log(`Validate stderr: ${stderr}`);
-    const duration = parseFloat(stdout.trim());
-    if (isNaN(duration) || duration <= 0) {
-      throw new Error('Invalid duration');
-    }
-  } catch (err) {
-    console.error(`Validate error: ${err}`);
-    throw new Error(`Invalid ${type} file: ${err}`);
-  }
-}
+/* ===============================
+   HEALTH
+================================*/
+app.get("/health", (_, res) => res.json({ ok: true }));
 
-/* ============================
+/* ===============================
    START
-============================ */
+================================*/
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log("🚀 Remotion Render Server running on", PORT);
-});
+app.listen(PORT, () => console.log("🚀 Render server running on", PORT));
