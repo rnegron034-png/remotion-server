@@ -33,7 +33,6 @@ function jobPath(id) {
 app.post("/remotion-render", async (req, res) => {
   try {
     const payload = req.body;
-
     if (!payload?.client_payload?.scenes?.length) {
       return res.status(400).json({ error: "Scenes missing" });
     }
@@ -44,7 +43,6 @@ app.post("/remotion-render", async (req, res) => {
     const jobId = uuidv4();
     const dir = jobPath(jobId);
     fs.mkdirSync(dir, { recursive: true });
-
     jobs.set(jobId, { status: "queued" });
 
     res.json({ jobId });
@@ -53,7 +51,6 @@ app.post("/remotion-render", async (req, res) => {
       console.error("JOB FAILED", e);
       jobs.set(jobId, { status: "error", error: String(e) });
     });
-
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Server error" });
@@ -74,7 +71,6 @@ app.get("/status/:jobId", (req, res) => {
 ============================ */
 async function processJob(jobId, payload) {
   jobs.set(jobId, { status: "downloading" });
-
   const dir = jobPath(jobId);
   const clips = payload.client_payload.scenes.map(s => s.src);
   const audioUrl = payload.client_payload.audio.src;
@@ -93,11 +89,11 @@ async function processJob(jobId, payload) {
 
   // Normalize clips
   jobs.set(jobId, { status: "processing" });
-
   const fixed = [];
   for (let i = 0; i < clipPaths.length; i++) {
     const out = path.join(dir, `fixed_${i}.mp4`);
-    await execAsync(`ffmpeg -y -i ${clipPaths[i]} -r 30 -c:v libx264 -pix_fmt yuv420p ${out}`);
+    // FIXED: Proper string concatenation instead of broken template literal
+    await execAsync(`ffmpeg -y -i "${clipPaths[i]}" -r 30 -c:v libx264 -pix_fmt yuv420p "${out}"`);
     fixed.push(out);
   }
 
@@ -106,10 +102,12 @@ async function processJob(jobId, payload) {
   fs.writeFileSync(concatFile, fixed.map(f => `file '${f}'`).join("\n"));
 
   const merged = path.join(dir, "merged.mp4");
-  await execAsync(`ffmpeg -y -f concat -safe 0 -i ${concatFile} -c copy ${merged}`);
+  // FIXED: Proper string concatenation
+  await execAsync(`ffmpeg -y -f concat -safe 0 -i "${concatFile}" -c copy "${merged}"`);
 
   const final = path.join(dir, "final.mp4");
-  await execAsync(`ffmpeg -y -i ${merged} -i ${audioPath} -map 0:v -map 1:a -shortest -c:v copy -c:a aac ${final}`);
+  // FIXED: Proper string concatenation
+  await execAsync(`ffmpeg -y -i "${merged}" -i "${audioPath}" -map 0:v -map 1:a -shortest -c:v copy -c:a aac "${final}"`);
 
   jobs.set(jobId, {
     status: "done",
