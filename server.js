@@ -16,9 +16,10 @@ fs.mkdirSync(WORKDIR, { recursive: true });
 
 // Configuration for cleanup
 const CLEANUP_CONFIG = {
-  deleteAfterDownload: true,  // Delete files immediately after download
-  deleteAfterHours: 2,         // Delete files older than 2 hours (backup cleanup)
-  cleanupIntervalMinutes: 30   // Run cleanup every 30 minutes
+  cleanupBeforeNewJob: true,
+  deleteAfterHours: 2,
+  cleanupIntervalMinutes: 30,
+  keepCompletedJobs: 5
 };
 
 function execAsync(cmd) {
@@ -55,6 +56,35 @@ function deleteJobFiles(jobId) {
   }
 }
 
+function cleanupCompletedJobs() {
+  const completedJobs = [];
+  jobs.forEach((job, jobId) => {
+    if (job.status === 'done' || job.status === 'error') {
+      completedJobs.push({ jobId, completedTime: job.completedTime || job.lastUpdated });
+    }
+  });
+
+  completedJobs.sort((a, b) => 
+    new Date(a.completedTime).getTime() - new Date(b.completedTime).getTime()
+  );
+
+  const toDelete = completedJobs.slice(0, Math.max(0, completedJobs.length - CLEANUP_CONFIG.keepCompletedJobs));
+  
+  let cleaned = 0;
+  toDelete.forEach(job => {
+    if (deleteJobFiles(job.jobId)) {
+      jobs.delete(job.jobId);
+      cleaned++;
+    }
+  });
+
+  if (cleaned > 0) {
+    console.log(`🧹 Cleaned up ${cleaned} completed jobs (keeping last ${CLEANUP_CONFIG.keepCompletedJobs})`);
+  }
+
+  return cleaned;
+}
+
 function cleanupOldJobs() {
   const now = new Date().getTime();
   const maxAge = CLEANUP_CONFIG.deleteAfterHours * 60 * 60 * 1000;
@@ -64,7 +94,6 @@ function cleanupOldJobs() {
     const jobTime = new Date(job.startTime).getTime();
     const age = now - jobTime;
 
-    // Delete if older than configured hours
     if (age > maxAge) {
       deleteJobFiles(jobId);
       jobs.delete(jobId);
@@ -73,13 +102,25 @@ function cleanupOldJobs() {
   });
 
   if (cleaned > 0) {
-    console.log(`🧹 Cleaned up ${cleaned} old jobs`);
+    console.log(`⏰ Cleaned up ${cleaned} old jobs (older than ${CLEANUP_CONFIG.deleteAfterHours}h)`);
+  }
+
+  return cleaned;
+}
+
+function cleanupBeforeNewJob() {
+  console.log('🧹 Running cleanup before new job...');
+  const completedCleaned = cleanupCompletedJobs();
+  const oldCleaned = cleanupOldJobs();
+  const total = completedCleaned + oldCleaned;
+  if (total > 0) {
+    console.log(`✅ Total cleanup: ${total} jobs removed`);
   }
 }
 
-// Start automatic cleanup interval
 setInterval(() => {
   cleanupOldJobs();
+  cleanupCompletedJobs();
 }, CLEANUP_CONFIG.cleanupIntervalMinutes * 60 * 1000);
 
 /* ---------------- SRT CONVERSION ---------------- */
@@ -92,46 +133,84 @@ function toSrtTime(t) {
   return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")},${String(ms).padStart(3,"0")}`;
 }
 
+// IMPROVED: Smart word-per-word subtitle generation
 function subtitlesToSrt(subs) {
   return subs.map((s, i) => {
+    // Limit words per line for better readability (3-5 words max)
+    let text = s.text;
+    const words = text.split(' ');
+    
+    // If too many words, split into multiple lines (max 3-5 words per line)
+    if (words.length > 5) {
+      const lines = [];
+      for (let i = 0; i < words.length; i += 4) {
+        lines.push(words.slice(i, i + 4).join(' '));
+      }
+      text = lines.join('\\N'); // \N creates new line in SRT
+    }
+    
     return `${i+1}
 ${toSrtTime(s.start)} --> ${toSrtTime(s.end)}
-${s.text}
+${text}
 
 `;
   }).join("");
 }
 
-/* ---------------- SUBTITLE STYLE PRESETS ---------------- */
+/* ---------------- OPTIMIZED SUBTITLE STYLES FOR 9:16 VIDEOS ---------------- */
 
 const SUBTITLE_STYLES = {
-  // Modern TikTok/Instagram Reels style - RECOMMENDED
-  modern: `Fontname=Montserrat ExtraBold,Fontsize=20,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H80000000&,Bold=1,Italic=0,BorderStyle=1,Outline=3,Shadow=2,Alignment=2,MarginV=80`,
-  
-  // Bold with yellow highlight (like many viral videos)
-  viral: `Fontname=Arial Black,Fontsize=52,PrimaryColour=&H00FFFF&,OutlineColour=&H000000&,BackColour=&H80000000&,Bold=1,Italic=0,BorderStyle=3,Outline=4,Shadow=3,Alignment=2,MarginV=80`,
-  
-  // Clean Netflix style
-  netflix: `Fontname=Netflix Sans,Fontsize=44,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H96000000&,Bold=0,Italic=0,BorderStyle=4,Outline=0,Shadow=0,Alignment=2,MarginV=60`,
-  
-  // Neon glow effect
-  neon: `Fontname=Impact,Fontsize=50,PrimaryColour=&H00FFFF&,OutlineColour=&HFF00FF&,BackColour=&H80000000&,Bold=1,Italic=0,BorderStyle=1,Outline=4,Shadow=0,Alignment=2,MarginV=80`,
-  
-  // Professional with box background
-  professional: `Fontname=Helvetica Neue Bold,Fontsize=46,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&HC8000000&,Bold=1,Italic=0,BorderStyle=4,Outline=2,Shadow=2,Alignment=2,MarginV=70`,
-  
-  // Minimalist clean
-  minimal: `Fontname=Roboto Bold,Fontsize=42,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,Italic=0,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=60`,
-  
-  // Gaming/YouTube style
-  gaming: `Fontname=Anton,Fontsize=54,PrimaryColour=&H00FF00&,OutlineColour=&H000000&,BackColour=&H80000000&,Bold=1,Italic=0,BorderStyle=1,Outline=5,Shadow=3,Alignment=2,MarginV=90`,
-  
-  // Elegant serif
-  elegant: `Fontname=Playfair Display Bold,Fontsize=44,PrimaryColour=&HFFFFFF&,OutlineColour=&H1A1A1A&,BackColour=&HA0000000&,Bold=1,Italic=0,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=70`
+  // 🔥 VIRAL - TikTok/Instagram Reels Style (BEST FOR ENGAGEMENT)
+  viral: {
+    name: "Viral",
+    style: `Fontname=Impact,Fontsize=70,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=6,Shadow=3,Alignment=2,MarginV=180`
+  },
+
+  // 🎯 MODERN - Clean Bold Style (RECOMMENDED)
+  modern: {
+    name: "Modern",
+    style: `Fontname=Arial Black,Fontsize=65,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=5,Shadow=2,Alignment=2,MarginV=200`
+  },
+
+  // 💛 HIGHLIGHT - Yellow Background Box (ATTENTION GRABBING)
+  highlight: {
+    name: "Highlight",
+    style: `Fontname=Arial Black,Fontsize=68,PrimaryColour=&H000000&,OutlineColour=&H000000&,BackColour=&H00FFFF&,Bold=1,BorderStyle=4,Outline=2,Shadow=0,Alignment=2,MarginV=200`
+  },
+
+  // 🌈 NEON - Colorful Glow (FOR ENERGETIC CONTENT)
+  neon: {
+    name: "Neon",
+    style: `Fontname=Impact,Fontsize=72,PrimaryColour=&H00FFFF&,OutlineColour=&HFF00FF&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=6,Shadow=0,Alignment=2,MarginV=180`
+  },
+
+  // 📦 BOX - Black Background Box (HIGH CONTRAST)
+  box: {
+    name: "Box",
+    style: `Fontname=Arial Black,Fontsize=66,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&HD0000000&,Bold=1,BorderStyle=4,Outline=3,Shadow=2,Alignment=2,MarginV=200`
+  },
+
+  // 🎬 CINEMATIC - Professional Style
+  cinematic: {
+    name: "Cinematic",
+    style: `Fontname=Arial,Fontsize=60,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H96000000&,Bold=1,BorderStyle=4,Outline=2,Shadow=1,Alignment=2,MarginV=150`
+  },
+
+  // 🎮 GAMING - Bold Green (FOR GAMING CONTENT)
+  gaming: {
+    name: "Gaming",
+    style: `Fontname=Impact,Fontsize=70,PrimaryColour=&H00FF00&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=6,Shadow=3,Alignment=2,MarginV=180`
+  },
+
+  // ⚡ MINIMAL - Simple & Clean
+  minimal: {
+    name: "Minimal",
+    style: `Fontname=Arial,Fontsize=62,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=4,Shadow=1,Alignment=2,MarginV=160`
+  }
 };
 
-// You can change this to any style above
-const DEFAULT_STYLE = SUBTITLE_STYLES.modern;
+// DEFAULT: Use VIRAL style (best for engagement)
+const DEFAULT_STYLE = SUBTITLE_STYLES.viral.style;
 
 /* ---------------- API ---------------- */
 
@@ -143,6 +222,10 @@ app.post("/remotion-render", async (req, res) => {
   }
   if (!payload?.client_payload?.audio?.src) {
     return res.status(400).json({ error: "Audio missing" });
+  }
+
+  if (CLEANUP_CONFIG.cleanupBeforeNewJob) {
+    cleanupBeforeNewJob();
   }
 
   const jobId = uuidv4();
@@ -159,8 +242,7 @@ app.post("/remotion-render", async (req, res) => {
     startTime: new Date().toISOString(),
     lastUpdated: new Date().toISOString(),
     downloadUrl: null,
-    error: null,
-    downloaded: false  // Track if file has been downloaded
+    error: null
   });
 
   res.json({ jobId, status: "queued", statusUrl: `/status/${jobId}` });
@@ -182,35 +264,16 @@ app.get("/download/:jobId", (req, res) => {
   if (!j || j.status !== "done") {
     return res.status(400).json({ error: "Not ready" });
   }
-
-  // Send the file
   res.download(j.outputFile, `video_${j.jobId}.mp4`, (err) => {
-    if (err) {
-      console.error(`Download error for job ${j.jobId}:`, err);
-      return;
-    }
-
-    // Mark as downloaded
-    update(j.jobId, { downloaded: true });
-
-    // Delete files after successful download if enabled
-    if (CLEANUP_CONFIG.deleteAfterDownload) {
-      setTimeout(() => {
-        deleteJobFiles(j.jobId);
-        jobs.delete(j.jobId);
-      }, 5000); // Wait 5 seconds before deleting (ensures download completed)
-    }
+    if (!err) console.log(`📥 Video downloaded: ${j.jobId}`);
   });
 });
 
-// Manual cleanup endpoint (optional)
 app.post("/cleanup/:jobId", (req, res) => {
   const jobId = req.params.jobId;
   const j = jobs.get(jobId);
   
-  if (!j) {
-    return res.status(404).json({ error: "Job not found" });
-  }
+  if (!j) return res.status(404).json({ error: "Job not found" });
 
   const deleted = deleteJobFiles(jobId);
   if (deleted) {
@@ -221,21 +284,37 @@ app.post("/cleanup/:jobId", (req, res) => {
   }
 });
 
-// Get server stats endpoint
+app.post("/cleanup-all", (req, res) => {
+  const completedCleaned = cleanupCompletedJobs();
+  const oldCleaned = cleanupOldJobs();
+  const total = completedCleaned + oldCleaned;
+  res.json({ success: true, cleaned: total, message: `Cleaned up ${total} jobs` });
+});
+
 app.get("/stats", (req, res) => {
   const stats = {
     totalJobs: jobs.size,
     queued: 0,
     processing: 0,
+    downloading: 0,
     done: 0,
     error: 0
   };
 
   jobs.forEach(job => {
-    stats[job.status]++;
+    if (stats[job.status] !== undefined) stats[job.status]++;
   });
 
   res.json(stats);
+});
+
+// NEW: Get available subtitle styles
+app.get("/subtitle-styles", (req, res) => {
+  const styles = Object.entries(SUBTITLE_STYLES).map(([key, value]) => ({
+    id: key,
+    name: value.name
+  }));
+  res.json({ styles, default: 'viral' });
 });
 
 /* ---------------- JOB PIPELINE ---------------- */
@@ -246,8 +325,19 @@ async function processJob(jobId, payload) {
   const audioUrl = payload.client_payload.audio.src;
   const subtitles = payload.client_payload.subtitles || [];
 
-  // Get custom style from payload or use default
-  const subtitleStyle = payload.client_payload.subtitleStyle || DEFAULT_STYLE;
+  // Get style from payload or use default
+  let subtitleStyle = DEFAULT_STYLE;
+  
+  if (payload.client_payload.subtitleStyle) {
+    const requestedStyle = payload.client_payload.subtitleStyle;
+    if (SUBTITLE_STYLES[requestedStyle]) {
+      subtitleStyle = SUBTITLE_STYLES[requestedStyle].style;
+      console.log(`Using subtitle style: ${SUBTITLE_STYLES[requestedStyle].name}`);
+    } else {
+      // Custom style string provided
+      subtitleStyle = requestedStyle;
+    }
+  }
 
   update(jobId, { status: "downloading", stage: "Downloading", progress: 5 });
 
@@ -255,7 +345,7 @@ async function processJob(jobId, payload) {
   const audioPath = path.join(dir, "audio.mp3");
   await download(audioUrl, audioPath);
 
-  // Write subtitles
+  // Write subtitles with smart formatting
   const srtPath = path.join(dir, "subs.srt");
   fs.writeFileSync(srtPath, subtitlesToSrt(subtitles));
 
@@ -275,7 +365,7 @@ async function processJob(jobId, payload) {
   for (let i = 0; i < clips.length; i++) {
     const out = path.join(dir, `fixed_${i}.mp4`);
     await execAsync(
-      `ffmpeg -y -i "${clips[i]}" -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" -r 30 -an -c:v libx264 "${out}"`
+      `ffmpeg -y -i "${clips[i]}" -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" -r 30 -an -c:v libx264 -preset fast "${out}"`
     );
     fixed.push(out);
     update(jobId, { progress: 50 + (i/clips.length)*20 });
@@ -291,11 +381,11 @@ async function processJob(jobId, payload) {
 
   update(jobId, { stage: "Adding subtitles and audio", progress: 85 });
 
-  // Burn subtitles + add audio with improved styling
+  // Burn subtitles + add audio
   const final = path.join(dir, "final.mp4");
   
-  // Escape the SRT path for FFmpeg
-  const escapedSrtPath = srtPath.replace(/\\/g, '\\\\').replace(/:/g, '\\:');
+  // Escape SRT path for FFmpeg
+  const escapedSrtPath = srtPath.replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/'/g, "'\\''");
   
   await execAsync(
     `ffmpeg -y -i "${merged}" -i "${audioPath}" -vf "subtitles='${escapedSrtPath}':force_style='${subtitleStyle}'" -map 0:v -map 1:a -shortest -c:v libx264 -preset medium -crf 23 -c:a aac -b:a 192k "${final}"`
@@ -327,9 +417,8 @@ async function download(url, output) {
 /* ---------------- START ---------------- */
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 Remotion server ready with improved subtitles!");
-  console.log(`📁 Work directory: ${WORKDIR}`);
-  console.log(`🧹 Cleanup: ${CLEANUP_CONFIG.deleteAfterDownload ? 'After download' : 'Never'}`);
-  console.log(`⏰ Auto-cleanup: Every ${CLEANUP_CONFIG.cleanupIntervalMinutes} minutes`);
-  console.log(`🗑️  Old files deleted after: ${CLEANUP_CONFIG.deleteAfterHours} hours`);
+  console.log("🚀 Remotion server ready!");
+  console.log("📱 Optimized for viral 9:16 videos");
+  console.log("🎬 Default style: VIRAL (best for engagement)");
+  console.log(`🧹 Cleanup: Before each job (keep ${CLEANUP_CONFIG.keepCompletedJobs} recent)`);
 });
