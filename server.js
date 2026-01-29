@@ -12,10 +12,9 @@ app.use(express.json({ limit: "200mb" }));
 
 const WORKDIR = "/tmp/jobs";
 fs.mkdirSync(WORKDIR, { recursive: true });
-
 const jobs = new Map();
 
-/* ================== UTILS ================== */
+/* ================= UTILS ================= */
 
 function execAsync(cmd) {
   return new Promise((resolve, reject) => {
@@ -30,12 +29,10 @@ function jobPath(id) {
   return path.join(WORKDIR, id);
 }
 
-function update(id, patch) {
-  const j = jobs.get(id);
-  if (j) jobs.set(id, { ...j, ...patch, lastUpdated: new Date().toISOString() });
+function update(jobId, patch) {
+  const j = jobs.get(jobId);
+  if (j) jobs.set(jobId, { ...j, ...patch, lastUpdated: new Date().toISOString() });
 }
-
-/* ================== DOWNLOAD ================== */
 
 async function download(url, out) {
   const r = await fetch(url);
@@ -48,7 +45,7 @@ async function download(url, out) {
   });
 }
 
-/* ================== KARAOKE ASS ================== */
+/* ================= KARAOKE ================= */
 
 function secToAss(t) {
   const h = Math.floor(t / 3600);
@@ -74,27 +71,31 @@ Format=Layer,Start,End,Style,Text
   for (const s of subs) {
     const words = s.text.split(" ");
     const total = s.end - s.start;
-    const wDur = total / words.length;
+    const w = total / words.length;
     let t = s.start;
 
     for (let i = 0; i < words.length; i++) {
-      const line = words.map((w, idx) =>
-        idx === i ? `{\\c&H00FFFF&}${w}{\\c&HFFFFFF&}` : w
+      const line = words.map((wrd, idx) =>
+        idx === i ? `{\\c&H00FFFF&}${wrd}{\\c&HFFFFFF&}` : wrd
       ).join(" ");
 
-      ass += `Dialogue:0,${secToAss(t)},${secToAss(t+wDur)},Default,${line}\n`;
-      t += wDur;
+      ass += `Dialogue:0,${secToAss(t)},${secToAss(t+w)},Default,${line}\n`;
+      t += w;
     }
   }
   return ass;
 }
 
-/* ================== API ================== */
+/* ================= API ================= */
 
 app.post("/remotion-render", async (req, res) => {
   const p = req.body;
-  if (!p?.client_payload?.scenes?.length) return res.status(400).json({ error: "No scenes" });
-  if (!p?.client_payload?.audio?.src) return res.status(400).json({ error: "No audio" });
+
+  if (!p?.client_payload?.scenes?.length)
+    return res.status(400).json({ error: "Scenes missing" });
+
+  if (!p?.client_payload?.audio?.src)
+    return res.status(400).json({ error: "Audio missing" });
 
   const jobId = uuidv4();
   const dir = jobPath(jobId);
@@ -105,7 +106,13 @@ app.post("/remotion-render", async (req, res) => {
     status: "queued",
     stage: "Queued",
     progress: 0,
-    startTime: new Date().toISOString()
+    totalScenes: p.client_payload.scenes.length,
+    processedScenes: 0,
+    startTime: new Date().toISOString(),
+    lastUpdated: new Date().toISOString(),
+    downloadUrl: null,
+    outputFile: null,
+    error: null
   });
 
   res.json({ jobId, statusUrl: `/status/${jobId}` });
@@ -128,15 +135,16 @@ app.get("/download/:id", (req, res) => {
   res.download(j.outputFile, `video_${j.jobId}.mp4`);
 });
 
-/* ================== JOB PIPELINE ================== */
+/* ================= PIPELINE ================= */
 
 async function processJob(jobId, payload) {
+  const start = Date.now();
   const dir = jobPath(jobId);
   const scenes = payload.client_payload.scenes;
   const audioUrl = payload.client_payload.audio.src;
-  const subs = payload.client_payload.subtitles || [];
+  const subtitles = payload.client_payload.subtitles || [];
 
-  update(jobId, { status: "downloading", stage: "Downloading", progress: 10 });
+  update(jobId, { status: "downloading", stage: "Downloading", progress: 5 });
 
   const audio = path.join(dir, "audio.mp3");
   await download(audioUrl, audio);
@@ -146,14 +154,15 @@ async function processJob(jobId, payload) {
     const p = path.join(dir, `clip_${i}.mp4`);
     await download(scenes[i].src, p);
     clips.push(p);
+    update(jobId, { processedScenes: i+1, progress: 10 + (i/scenes.length)*30 });
   }
 
-  update(jobId, { stage: "Formatting clips", progress: 40 });
+  update(jobId, { status: "processing", stage: "Formatting clips", progress: 40 });
 
   const fixed = [];
   for (let i = 0; i < clips.length; i++) {
     const out = path.join(dir, `fixed_${i}.mp4`);
-    await execAsync(`ffmpeg -y -i "${clips[i]}" -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='1.02':d=125" -an -r 30 -preset veryfast "${out}"`);
+    await execAsync(`ffmpeg -y -i "${clips[i]}" -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='1.03':d=125" -an -r 30 -preset veryfast "${out}"`);
     fixed.push(out);
   }
 
@@ -162,27 +171,35 @@ async function processJob(jobId, payload) {
   const merged = path.join(dir, "merged.mp4");
   await execAsync(`ffmpeg -y -f concat -safe 0 -i "${list}" -c copy "${merged}"`);
 
-  update(jobId, { stage: "Subtitles", progress: 70 });
-
   const ass = path.join(dir, "subs.ass");
-  fs.writeFileSync(ass, karaokeASS(subs));
+  fs.writeFileSync(ass, karaokeASS(subtitles));
+
+  update(jobId, { stage: "Subtitles & Audio", progress: 80 });
 
   const final = path.join(dir, "final.mp4");
   await execAsync(
     `ffmpeg -y -i "${merged}" -i "${audio}" -vf "ass=${ass}" -map 0:v -map 1:a -shortest -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 192k "${final}"`
   );
 
+  const stats = fs.statSync(final);
+  const sizeMB = (stats.size / 1024 / 1024).toFixed(2);
+
+  const totalTime = Math.round((Date.now() - start) / 1000);
+
   update(jobId, {
     status: "done",
     stage: "Complete",
     progress: 100,
     outputFile: final,
-    downloadUrl: `/download/${jobId}`
+    downloadUrl: `/download/${jobId}`,
+    completedTime: new Date().toISOString(),
+    renderTime: totalTime,
+    fileSize: sizeMB + " MB"
   });
 }
 
-/* ================== START ================== */
+/* ================= START ================= */
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 Karaoke Remotion Server Running");
+  console.log("🚀 Karaoke Render Server Ready");
 });
