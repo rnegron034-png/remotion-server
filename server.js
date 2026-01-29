@@ -14,6 +14,13 @@ const jobs = new Map();
 const WORKDIR = "/tmp/jobs";
 fs.mkdirSync(WORKDIR, { recursive: true });
 
+// Configuration for cleanup
+const CLEANUP_CONFIG = {
+  deleteAfterDownload: true,  // Delete files immediately after download
+  deleteAfterHours: 2,         // Delete files older than 2 hours (backup cleanup)
+  cleanupIntervalMinutes: 30   // Run cleanup every 30 minutes
+};
+
 function execAsync(cmd) {
   return new Promise((resolve, reject) => {
     exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, (err, stdout, stderr) => {
@@ -31,6 +38,49 @@ function update(jobId, patch) {
   const j = jobs.get(jobId);
   if (j) jobs.set(jobId, { ...j, ...patch, lastUpdated: new Date().toISOString() });
 }
+
+/* ---------------- CLEANUP FUNCTIONS ---------------- */
+
+function deleteJobFiles(jobId) {
+  try {
+    const dir = jobPath(jobId);
+    if (fs.existsSync(dir)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+      console.log(`✅ Cleaned up files for job: ${jobId}`);
+      return true;
+    }
+  } catch (err) {
+    console.error(`❌ Failed to cleanup job ${jobId}:`, err);
+    return false;
+  }
+}
+
+function cleanupOldJobs() {
+  const now = new Date().getTime();
+  const maxAge = CLEANUP_CONFIG.deleteAfterHours * 60 * 60 * 1000;
+  let cleaned = 0;
+
+  jobs.forEach((job, jobId) => {
+    const jobTime = new Date(job.startTime).getTime();
+    const age = now - jobTime;
+
+    // Delete if older than configured hours
+    if (age > maxAge) {
+      deleteJobFiles(jobId);
+      jobs.delete(jobId);
+      cleaned++;
+    }
+  });
+
+  if (cleaned > 0) {
+    console.log(`🧹 Cleaned up ${cleaned} old jobs`);
+  }
+}
+
+// Start automatic cleanup interval
+setInterval(() => {
+  cleanupOldJobs();
+}, CLEANUP_CONFIG.cleanupIntervalMinutes * 60 * 1000);
 
 /* ---------------- SRT CONVERSION ---------------- */
 
@@ -56,7 +106,7 @@ ${s.text}
 
 const SUBTITLE_STYLES = {
   // Modern TikTok/Instagram Reels style - RECOMMENDED
-  modern: `Fontname=Montserrat ExtraBold,Fontsize=48,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H80000000&,Bold=1,Italic=0,BorderStyle=1,Outline=3,Shadow=2,Alignment=2,MarginV=80`,
+  modern: `Fontname=Montserrat ExtraBold,Fontsize=20,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H80000000&,Bold=1,Italic=0,BorderStyle=1,Outline=3,Shadow=2,Alignment=2,MarginV=80`,
   
   // Bold with yellow highlight (like many viral videos)
   viral: `Fontname=Arial Black,Fontsize=52,PrimaryColour=&H00FFFF&,OutlineColour=&H000000&,BackColour=&H80000000&,Bold=1,Italic=0,BorderStyle=3,Outline=4,Shadow=3,Alignment=2,MarginV=80`,
@@ -109,7 +159,8 @@ app.post("/remotion-render", async (req, res) => {
     startTime: new Date().toISOString(),
     lastUpdated: new Date().toISOString(),
     downloadUrl: null,
-    error: null
+    error: null,
+    downloaded: false  // Track if file has been downloaded
   });
 
   res.json({ jobId, status: "queued", statusUrl: `/status/${jobId}` });
@@ -128,8 +179,63 @@ app.get("/status/:jobId", (req, res) => {
 
 app.get("/download/:jobId", (req, res) => {
   const j = jobs.get(req.params.jobId);
-  if (!j || j.status !== "done") return res.status(400).json({ error: "Not ready" });
-  res.download(j.outputFile, `video_${j.jobId}.mp4`);
+  if (!j || j.status !== "done") {
+    return res.status(400).json({ error: "Not ready" });
+  }
+
+  // Send the file
+  res.download(j.outputFile, `video_${j.jobId}.mp4`, (err) => {
+    if (err) {
+      console.error(`Download error for job ${j.jobId}:`, err);
+      return;
+    }
+
+    // Mark as downloaded
+    update(j.jobId, { downloaded: true });
+
+    // Delete files after successful download if enabled
+    if (CLEANUP_CONFIG.deleteAfterDownload) {
+      setTimeout(() => {
+        deleteJobFiles(j.jobId);
+        jobs.delete(j.jobId);
+      }, 5000); // Wait 5 seconds before deleting (ensures download completed)
+    }
+  });
+});
+
+// Manual cleanup endpoint (optional)
+app.post("/cleanup/:jobId", (req, res) => {
+  const jobId = req.params.jobId;
+  const j = jobs.get(jobId);
+  
+  if (!j) {
+    return res.status(404).json({ error: "Job not found" });
+  }
+
+  const deleted = deleteJobFiles(jobId);
+  if (deleted) {
+    jobs.delete(jobId);
+    res.json({ success: true, message: "Job cleaned up" });
+  } else {
+    res.status(500).json({ error: "Cleanup failed" });
+  }
+});
+
+// Get server stats endpoint
+app.get("/stats", (req, res) => {
+  const stats = {
+    totalJobs: jobs.size,
+    queued: 0,
+    processing: 0,
+    done: 0,
+    error: 0
+  };
+
+  jobs.forEach(job => {
+    stats[job.status]++;
+  });
+
+  res.json(stats);
 });
 
 /* ---------------- JOB PIPELINE ---------------- */
@@ -162,6 +268,8 @@ async function processJob(jobId, payload) {
     update(jobId, { processedScenes: i + 1, progress: 10 + (i/scenes.length)*40 });
   }
 
+  update(jobId, { status: "processing", stage: "Processing clips", progress: 50 });
+
   // Normalize + crop to 9:16
   const fixed = [];
   for (let i = 0; i < clips.length; i++) {
@@ -170,13 +278,18 @@ async function processJob(jobId, payload) {
       `ffmpeg -y -i "${clips[i]}" -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" -r 30 -an -c:v libx264 "${out}"`
     );
     fixed.push(out);
+    update(jobId, { progress: 50 + (i/clips.length)*20 });
   }
+
+  update(jobId, { stage: "Merging clips", progress: 70 });
 
   // Concat
   const list = path.join(dir, "list.txt");
   fs.writeFileSync(list, fixed.map(f => `file '${f}'`).join("\n"));
   const merged = path.join(dir, "merged.mp4");
   await execAsync(`ffmpeg -y -f concat -safe 0 -i "${list}" -c copy "${merged}"`);
+
+  update(jobId, { stage: "Adding subtitles and audio", progress: 85 });
 
   // Burn subtitles + add audio with improved styling
   const final = path.join(dir, "final.mp4");
@@ -215,4 +328,8 @@ async function download(url, output) {
 
 app.listen(process.env.PORT || 3000, () => {
   console.log("🚀 Remotion server ready with improved subtitles!");
+  console.log(`📁 Work directory: ${WORKDIR}`);
+  console.log(`🧹 Cleanup: ${CLEANUP_CONFIG.deleteAfterDownload ? 'After download' : 'Never'}`);
+  console.log(`⏰ Auto-cleanup: Every ${CLEANUP_CONFIG.cleanupIntervalMinutes} minutes`);
+  console.log(`🗑️  Old files deleted after: ${CLEANUP_CONFIG.deleteAfterHours} hours`);
 });
