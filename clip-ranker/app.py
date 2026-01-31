@@ -6,10 +6,15 @@ from io import BytesIO
 from PIL import Image
 from flask import Flask, request, jsonify
 
+# Reduce CPU + RAM usage
+torch.set_num_threads(1)
+
 app = Flask(__name__)
 
-print("Loading CLIP model...")
-model, preprocess = clip.load("ViT-B/32")
+print("Loading CLIP model (RN50)...")
+model, preprocess = clip.load("RN50")
+model = model.half()   # use FP16 = 50% less RAM
+model.eval()
 print("CLIP loaded.")
 
 def load_image(url):
@@ -30,12 +35,12 @@ def rank():
         results = []
 
         with torch.no_grad():
-            text_features = model.encode_text(text)
+            text_features = model.encode_text(text).half()
 
             for item in images:
                 try:
                     img = load_image(item["thumb"])
-                    img_tensor = preprocess(img).unsqueeze(0)
+                    img_tensor = preprocess(img).unsqueeze(0).half()
                     img_features = model.encode_image(img_tensor)
 
                     score = torch.cosine_similarity(img_features, text_features).item()
@@ -57,6 +62,6 @@ def rank():
         }), 400
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 8080))
     print("Starting server on port", port)
     app.run(host="0.0.0.0", port=port)
