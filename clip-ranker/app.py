@@ -1,43 +1,62 @@
+import os
 import clip
 import torch
-from PIL import Image
 import requests
 from io import BytesIO
+from PIL import Image
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
+print("Loading CLIP model...")
 model, preprocess = clip.load("ViT-B/32")
+print("CLIP loaded.")
 
-def get_image(url):
+def load_image(url):
     r = requests.get(url, timeout=10)
+    r.raise_for_status()
     return Image.open(BytesIO(r.content)).convert("RGB")
 
 @app.route("/rank", methods=["POST"])
 def rank():
-    data = request.json
-    scene = data["scene"]
-    images = data["images"]
+    try:
+        data = request.get_json(force=True)
 
-    text = clip.tokenize([scene])
+        scene = data["scene"]
+        images = data["images"]
 
-    scores = []
+        text = clip.tokenize([scene])
 
-    with torch.no_grad():
-        text_features = model.encode_text(text)
+        results = []
 
-        for img in images:
-            try:
-                image = preprocess(get_image(img["thumb"])).unsqueeze(0)
-                image_features = model.encode_image(image)
-                score = torch.cosine_similarity(image_features, text_features).item()
-                scores.append({
-                    "url": img["url"],
-                    "score": score
-                })
-            except:
-                pass
+        with torch.no_grad():
+            text_features = model.encode_text(text)
 
-    scores.sort(key=lambda x: x["score"], reverse=True)
+            for item in images:
+                try:
+                    img = load_image(item["thumb"])
+                    img_tensor = preprocess(img).unsqueeze(0)
+                    img_features = model.encode_image(img_tensor)
 
-    return jsonify(scores[:3])
+                    score = torch.cosine_similarity(img_features, text_features).item()
+
+                    results.append({
+                        "url": item["url"],
+                        "score": round(score, 4)
+                    })
+                except Exception as e:
+                    print("Image error:", e)
+
+        results.sort(key=lambda x: x["score"], reverse=True)
+
+        return jsonify(results[:3])
+
+    except Exception as e:
+        return jsonify({
+            "error": str(e)
+        }), 400
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    print("Starting server on port", port)
+    app.run(host="0.0.0.0", port=port)
