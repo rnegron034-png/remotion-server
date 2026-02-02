@@ -133,7 +133,7 @@ function buildKaraokeText(words) {
   });
   return text;
 }
-function subtitlesToAss(subs, fontsize = 70) {
+function subtitlesToAss(subs, fontsize = 90) {
   // VIRAL ASS SUBTITLE with proper yellow karaoke
   let ass = `[Script Info]
 Title: Viral Karaoke Subtitles
@@ -158,16 +158,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 /* ---------------- SUBTITLE STYLES ---------------- */
 const SUBTITLE_STYLES = {
   viral: {
-    name: "Viral Style - 70px Yellow Karaoke (CENTER)",
-    fontsize: 70
+    name: "Viral Style - 90px Yellow Karaoke (CENTER)",
+    fontsize: 90
   },
   viralBottom: {
-    name: "Viral Style - 70px Yellow Karaoke (BOTTOM)",
-    fontsize: 70
+    name: "Viral Style - 90px Yellow Karaoke (BOTTOM)",
+    fontsize: 90
   },
   viralHuge: {
-    name: "Viral Style - 90px MEGA Yellow Karaoke (CENTER)",
-    fontsize: 90
+    name: "Viral Style - 120px MEGA Yellow Karaoke (CENTER)",
+    fontsize: 120
   },
   karaoke: {
     name: "Poppins 40px Karaoke Center (Yellow Highlight)",
@@ -262,7 +262,7 @@ app.get("/subtitle-styles", (req, res) => {
   }));
   res.json({ styles, default: DEFAULT_STYLE });
 });
-/* ---------------- JOB PIPELINE WITH FAST LIGHT EFFECT ---------------- */
+/* ---------------- JOB PIPELINE ---------------- */
 async function processJob(jobId, payload) {
   const dir = jobPath(jobId);
   const scenes = payload.client_payload.scenes;
@@ -292,13 +292,13 @@ async function processJob(jobId, payload) {
   fs.writeFileSync(list, clips.map(f => `file '${f}'`).join("\n"));
   const merged = path.join(dir, "merged.mp4");
   await execAsync(`ffmpeg -y -f concat -safe 0 -i "${list}" -c copy "${merged}"`);
-  update(jobId, { stage: "✨ Adding YELLOW karaoke subtitles with light effect", progress: 70 });
+  update(jobId, { stage: "✨ Adding YELLOW karaoke subtitles", progress: 70 });
   const final = path.join(dir, "final.mp4");
  
-  // CRITICAL: Use ass filter for proper yellow karaoke rendering + fast light effect (color grading)
+  // CRITICAL: Use ass filter for proper yellow karaoke rendering
   // Optimized: veryfast preset and crf 23 for faster encoding with good quality
   await execAsync(
-    `ffmpeg -y -i "${merged}" -i "${audioPath}" -vf "ass='${subtitlePath}',eq=contrast=1.15:brightness=0.03:saturation=1.2" -map 0:v -map 1:a -shortest -c:v libx264 -preset veryfast -crf 23 -c:a aac -b:a 192k "${final}"`
+    `ffmpeg -y -i "${merged}" -i "${audioPath}" -vf "ass='${subtitlePath}'" -map 0:v -map 1:a -shortest -c:v libx264 -preset veryfast -crf 23 -c:a aac -b:a 192k "${final}"`
   );
   update(jobId, {
     status: "done",
@@ -322,11 +322,10 @@ async function download(url, output) {
 }
 /* ---------------- START ---------------- */
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 VIRAL VIDEO SERVER READY! (OPTIMIZED FAST VERSION)");
+  console.log("🚀 VIRAL VIDEO SERVER READY! (OPTIMIZED VERSION)");
   console.log("🔥 WORKING FEATURES:");
-  console.log(" ✅ 70-90px YELLOW karaoke subtitles");
+  console.log(" ✅ 90-120px YELLOW karaoke subtitles");
   console.log(" ✅ Word-by-word highlighting");
-  console.log(" ✅ Fast light effect (color grading)");
   console.log(" ✅ Optimized FFmpeg presets for speed");
   console.log(" ✅ Professional viral-ready output");
   console.log(`\n📝 Default: ${SUBTITLE_STYLES[DEFAULT_STYLE].name}`);
