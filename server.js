@@ -165,7 +165,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Poppins Black,${fontsize},&H00FFFF00,&H0000FFFF,&H00000000,&HB4000000,1,0,0,0,105,105,2,0,1,8,8,2,30,30,180,1
+Style: Default,Poppins Black,${fontsize},&H00FFFF00,&H0000FFFF,&H00000000,&HB4000000,1,0,0,0,105,105,2,0,1,8,8,5,30,30,50,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -354,13 +354,26 @@ async function processJob(jobId, payload) {
 
   update(jobId, { stage: "Merging clips", progress: 70 });
 
-  // Concatenate all resized clips - re-encode to ensure compatibility
-  const list = path.join(dir, "list.txt");
-  fs.writeFileSync(list, resized.map(f => `file '${f}'`).join("\n"));
-
+  console.log(`📦 Merging ${resized.length} clips for job ${jobId}`);
+  
   const merged = path.join(dir, "merged.mp4");
-  // Re-encode during concat to avoid issues with different codecs/settings
-  await execAsync(`ffmpeg -y -f concat -safe 0 -i "${list}" -c:v libx264 -preset medium -crf 18 -an "${merged}"`);
+  
+  if (resized.length === 1) {
+    // Only one clip, just copy it
+    console.log(`📝 Single clip, copying directly`);
+    fs.copyFileSync(resized[0], merged);
+  } else {
+    // Multiple clips - use filter_complex concat for reliability
+    console.log(`📝 Concatenating ${resized.length} clips using filter_complex`);
+    
+    const inputs = resized.map(f => `-i "${f}"`).join(' ');
+    const filterParts = resized.map((_, i) => `[${i}:v]`).join('');
+    const concatFilter = `${filterParts}concat=n=${resized.length}:v=1:a=0[outv]`;
+    
+    const concatCmd = `ffmpeg -y ${inputs} -filter_complex "${concatFilter}" -map "[outv]" -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p "${merged}"`;
+    console.log(`🎬 Running concat with filter_complex`);
+    await execAsync(concatCmd);
+  }
 
   update(jobId, { stage: "✨ Adding EXTRA LARGE YELLOW karaoke subtitles", progress: 85 });
 
@@ -370,10 +383,18 @@ async function processJob(jobId, payload) {
   const durationCmd = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${merged}"`;
   const videoDuration = parseFloat((await execAsync(durationCmd)).trim());
   
+  console.log(`📹 Video duration: ${videoDuration}s`);
+  
+  // Get audio duration
+  const audioDurationCmd = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${audioPath}"`;
+  const audioDuration = parseFloat((await execAsync(audioDurationCmd)).trim());
+  
+  console.log(`🎵 Audio duration: ${audioDuration}s`);
+  
   // Add subtitles and audio with proper sync
-  // Use atrim to ensure audio starts at 0 and matches video timeline
+  // If audio is shorter, pad it. If longer, trim it to match video.
   await execAsync(
-    `ffmpeg -y -i "${merged}" -i "${audioPath}" -filter_complex "[0:v]ass='${subtitlePath}'[v];[1:a]atrim=0:${videoDuration},asetpts=PTS-STARTPTS[a]" -map "[v]" -map "[a]" -c:v libx264 -preset medium -crf 18 -c:a aac -b:a 192k "${final}"`
+    `ffmpeg -y -i "${merged}" -i "${audioPath}" -filter_complex "[0:v]ass='${subtitlePath}'[v];[1:a]atrim=0:${videoDuration},asetpts=PTS-STARTPTS,apad[a]" -map "[v]" -map "[a]" -shortest -c:v libx264 -preset medium -crf 18 -c:a aac -b:a 192k "${final}"`
   );
 
   update(jobId, {
