@@ -23,9 +23,47 @@ const CLEANUP_CONFIG = {
 
 function execAsync(cmd) {
   return new Promise((resolve, reject) => {
-    exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, (err, stdout, stderr) => {
+    exec(cmd, { maxBuffer: 1024 * 1024 * 50 }, (err, stdout, stderr) => {
       if (err) reject(stderr || err);
       else resolve(stdout);
+    });
+  });
+}
+
+function execAsyncWithProgress(cmd, onProgress) {
+  return new Promise((resolve, reject) => {
+    const process = exec(cmd, { maxBuffer: 1024 * 1024 * 50 });
+    
+    let output = '';
+    
+    process.stdout?.on('data', (data) => {
+      output += data.toString();
+      if (onProgress) onProgress(data.toString());
+    });
+    
+    process.stderr?.on('data', (data) => {
+      const str = data.toString();
+      output += str;
+      if (onProgress) onProgress(str);
+      
+      // Extract progress from ffmpeg output
+      const timeMatch = str.match(/time=(\d{2}):(\d{2}):(\d{2})/);
+      if (timeMatch) {
+        const seconds = parseInt(timeMatch[1]) * 3600 + parseInt(timeMatch[2]) * 60 + parseInt(timeMatch[3]);
+        console.log(`⏱️  Progress: ${timeMatch[0]} (${seconds}s processed)`);
+      }
+    });
+    
+    process.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(`Process exited with code ${code}`));
+      } else {
+        resolve(output);
+      }
+    });
+    
+    process.on('error', (err) => {
+      reject(err);
     });
   });
 }
@@ -391,12 +429,18 @@ async function processJob(jobId, payload) {
   const audioDuration = parseFloat((await execAsync(audioDurationCmd)).trim());
   
   console.log(`🎵 Audio duration: ${audioDuration}s`);
+  console.log(`🎬 Starting subtitle rendering with real-time progress...`);
   
   // Add subtitles and audio with proper sync
-  // If audio is shorter, pad it. If longer, trim it to match video.
-  await execAsync(
-    `ffmpeg -y -i "${merged}" -i "${audioPath}" -filter_complex "[0:v]ass='${subtitlePath}'[v];[1:a]atrim=0:${videoDuration},asetpts=PTS-STARTPTS,apad[a]" -map "[v]" -map "[a]" -shortest -c:v libx264 -preset medium -crf 18 -c:a aac -b:a 192k "${final}"`
-  );
+  // Use ultrafast preset for speed, with progress monitoring
+  const finalCmd = `ffmpeg -y -i "${merged}" -i "${audioPath}" -vf "ass='${subtitlePath}'" -map 0:v -map 1:a -shortest -c:v libx264 -preset ultrafast -crf 20 -c:a aac -b:a 192k "${final}"`;
+  
+  console.log(`🎬 Rendering with subtitles (this will take ~2-3 minutes for 2-minute video)...`);
+  await execAsyncWithProgress(finalCmd, (data) => {
+    // Progress is logged automatically in execAsyncWithProgress
+  });
+  
+  console.log(`✅ Subtitle rendering complete!`);
 
   update(jobId, {
     status: "done",
