@@ -344,8 +344,9 @@ async function processJob(jobId, payload) {
     const out = path.join(dir, `resized_${i}.mp4`);
    
     // Simple center crop to 9:16 with high quality
+    // Fix SAR to 1:1 and ensure consistent framerate to avoid concat issues
     await execAsync(
-      `ffmpeg -y -i "${clips[i]}" -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" -c:v libx264 -preset medium -crf 18 -an "${out}"`
+      `ffmpeg -y -i "${clips[i]}" -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1:1,fps=30" -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p -an "${out}"`
     );
     
     resized.push(out);
@@ -363,15 +364,15 @@ async function processJob(jobId, payload) {
     console.log(`📝 Single clip, copying directly`);
     fs.copyFileSync(resized[0], merged);
   } else {
-    // Multiple clips - use filter_complex concat for reliability
-    console.log(`📝 Concatenating ${resized.length} clips using filter_complex`);
+    // Multiple clips - use concat demuxer (now safe since all clips are normalized)
+    console.log(`📝 Concatenating ${resized.length} clips`);
     
-    const inputs = resized.map(f => `-i "${f}"`).join(' ');
-    const filterParts = resized.map((_, i) => `[${i}:v]`).join('');
-    const concatFilter = `${filterParts}concat=n=${resized.length}:v=1:a=0[outv]`;
+    const list = path.join(dir, "list.txt");
+    fs.writeFileSync(list, resized.map(f => `file '${f}'`).join("\n"));
     
-    const concatCmd = `ffmpeg -y ${inputs} -filter_complex "${concatFilter}" -map "[outv]" -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p "${merged}"`;
-    console.log(`🎬 Running concat with filter_complex`);
+    // Use stream copy since all clips now have identical properties
+    const concatCmd = `ffmpeg -y -f concat -safe 0 -i "${list}" -c copy "${merged}"`;
+    console.log(`🎬 Running concat`);
     await execAsync(concatCmd);
   }
 
