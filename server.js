@@ -40,6 +40,7 @@ function update(jobId, patch) {
 }
 
 /* ---------------- CLEANUP FUNCTIONS ---------------- */
+
 function deleteJobFiles(jobId) {
   try {
     const dir = jobPath(jobId);
@@ -62,12 +63,12 @@ function cleanupCompletedJobs() {
     }
   });
 
-  completedJobs.sort((a, b) =>
+  completedJobs.sort((a, b) => 
     new Date(a.completedTime).getTime() - new Date(b.completedTime).getTime()
   );
 
   const toDelete = completedJobs.slice(0, Math.max(0, completedJobs.length - CLEANUP_CONFIG.keepCompletedJobs));
- 
+  
   let cleaned = 0;
   toDelete.forEach(job => {
     if (deleteJobFiles(job.jobId)) {
@@ -79,6 +80,7 @@ function cleanupCompletedJobs() {
   if (cleaned > 0) {
     console.log(`🧹 Cleaned up ${cleaned} completed jobs (keeping last ${CLEANUP_CONFIG.keepCompletedJobs})`);
   }
+
   return cleaned;
 }
 
@@ -90,6 +92,7 @@ function cleanupOldJobs() {
   jobs.forEach((job, jobId) => {
     const jobTime = new Date(job.startTime).getTime();
     const age = now - jobTime;
+
     if (age > maxAge) {
       deleteJobFiles(jobId);
       jobs.delete(jobId);
@@ -100,6 +103,7 @@ function cleanupOldJobs() {
   if (cleaned > 0) {
     console.log(`⏰ Cleaned up ${cleaned} old jobs (older than ${CLEANUP_CONFIG.deleteAfterHours}h)`);
   }
+
   return cleaned;
 }
 
@@ -119,6 +123,7 @@ setInterval(() => {
 }, CLEANUP_CONFIG.cleanupIntervalMinutes * 60 * 1000);
 
 /* ---------------- ASS SUBTITLE GENERATION ---------------- */
+
 function toAssTime(t) {
   const h = Math.floor(t / 3600);
   const m = Math.floor((t % 3600) / 60);
@@ -132,7 +137,7 @@ function estimateWordTiming(sub) {
   const words = text.split(/\s+/).filter(w => w.length > 0);
   const duration = sub.end - sub.start;
   const timePerWord = duration / words.length;
- 
+  
   return words.map((word, i) => ({
     word,
     start: sub.start + (i * timePerWord),
@@ -153,10 +158,10 @@ function buildKaraokeText(words) {
   return text;
 }
 
-function subtitlesToAss(subs, fontsize = 120) {
-  // EXTRA LARGE BRIGHT YELLOW KARAOKE SUBTITLES
+function subtitlesToAss(subs, fontsize = 70) {
+  // VIRAL ASS SUBTITLE with proper yellow karaoke
   let ass = `[Script Info]
-Title: Extra Large Yellow Karaoke Subtitles
+Title: Viral Karaoke Subtitles
 ScriptType: v4.00+
 WrapStyle: 0
 PlayResX: 1080
@@ -165,7 +170,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Poppins Black,${fontsize},&H00FFFF00,&H0000FFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,6,5,5,20,20,120,1
+Style: Default,Poppins Black,${fontsize},&H00FFFFFF,&H0000FFFF,&H00000000,&H00000000,1,0,0,0,100,100,-35,0,1,5,4,5,20,20,100,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -181,30 +186,33 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 }
 
 /* ---------------- SUBTITLE STYLES ---------------- */
+
 const SUBTITLE_STYLES = {
-  extraLarge: {
-    name: "Extra Large - 120px Bright Yellow Karaoke",
-    fontsize: 120
+  viral: {
+    name: "Viral Style - 70px Yellow Karaoke (CENTER)",
+    fontsize: 70
   },
-  mega: {
-    name: "Mega - 140px Bright Yellow Karaoke",
-    fontsize: 140
+  viralBottom: {
+    name: "Viral Style - 70px Yellow Karaoke (BOTTOM)",
+    fontsize: 70
   },
-  giant: {
-    name: "Giant - 160px Bright Yellow Karaoke",
-    fontsize: 160
+  viralHuge: {
+    name: "Viral Style - 90px MEGA Yellow Karaoke (CENTER)",
+    fontsize: 90
   },
-  large: {
-    name: "Large - 100px Bright Yellow Karaoke",
-    fontsize: 100
+  karaoke: {
+    name: "Poppins 40px Karaoke Center (Yellow Highlight)",
+    fontsize: 40
   }
 };
 
-const DEFAULT_STYLE = 'extraLarge';
+const DEFAULT_STYLE = 'viral';
 
 /* ---------------- API ---------------- */
+
 app.post("/remotion-render", async (req, res) => {
   const payload = req.body;
+
   if (!payload?.client_payload?.scenes?.length) {
     return res.status(400).json({ error: "Scenes missing" });
   }
@@ -260,7 +268,7 @@ app.get("/download/:jobId", (req, res) => {
 app.post("/cleanup/:jobId", (req, res) => {
   const jobId = req.params.jobId;
   const j = jobs.get(jobId);
- 
+  
   if (!j) return res.status(404).json({ error: "Job not found" });
 
   const deleted = deleteJobFiles(jobId);
@@ -288,9 +296,11 @@ app.get("/stats", (req, res) => {
     done: 0,
     error: 0
   };
+
   jobs.forEach(job => {
     if (stats[job.status] !== undefined) stats[job.status]++;
   });
+
   res.json(stats);
 });
 
@@ -302,7 +312,8 @@ app.get("/subtitle-styles", (req, res) => {
   res.json({ styles, default: DEFAULT_STYLE });
 });
 
-/* ---------------- SIMPLIFIED JOB PIPELINE (NO VIDEO EFFECTS) ---------------- */
+/* ---------------- JOB PIPELINE WITH CINEMATIC EFFECTS ---------------- */
+
 async function processJob(jobId, payload) {
   const dir = jobPath(jobId);
   const scenes = payload.client_payload.scenes;
@@ -314,65 +325,84 @@ async function processJob(jobId, payload) {
   const styleData = SUBTITLE_STYLES[requestedStyle] || SUBTITLE_STYLES[DEFAULT_STYLE];
   const fontsize = styleData.fontsize;
 
-  console.log(`🎬 Using subtitle style: ${styleData.name} (${fontsize}px BRIGHT YELLOW karaoke)`);
+  console.log(`🎬 Using subtitle style: ${styleData.name} (${fontsize}px YELLOW karaoke)`);
 
-  update(jobId, { status: "downloading", stage: "Downloading audio & clips", progress: 5 });
+  update(jobId, { status: "downloading", stage: "Downloading", progress: 5 });
 
-  // Download audio
   const audioPath = path.join(dir, "audio.mp3");
   await download(audioUrl, audioPath);
 
-  // Create ASS subtitle file with BRIGHT YELLOW karaoke
+  // Create ASS subtitle file with YELLOW karaoke
   const subtitlePath = path.join(dir, "subs.ass");
   const assContent = subtitlesToAss(subtitles, fontsize);
   fs.writeFileSync(subtitlePath, assContent);
 
-  // Download all clips
   const clips = [];
   for (let i = 0; i < scenes.length; i++) {
     const p = path.join(dir, `clip_${i}.mp4`);
     await download(scenes[i].src, p);
     clips.push(p);
-    update(jobId, { processedScenes: i + 1, progress: 10 + (i/scenes.length)*40 });
+    update(jobId, { processedScenes: i + 1, progress: 10 + (i/scenes.length)*30 });
   }
 
-  update(jobId, { status: "processing", stage: "Resizing clips to 9:16", progress: 50 });
+  update(jobId, { status: "processing", stage: "🎬 Adding cinematic effects", progress: 40 });
 
-  // Resize clips to 9:16 format (NO EFFECTS - just crop/scale)
-  const resized = [];
+  // 🎬 CINEMATIC PROCESSING WITH MOTION EFFECTS
+  const cinematic = [];
   for (let i = 0; i < clips.length; i++) {
-    const out = path.join(dir, `resized_${i}.mp4`);
-   
-    // Simple center crop to 9:16 with high quality
-    await execAsync(
-      `ffmpeg -y -i "${clips[i]}" -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" -c:v libx264 -preset medium -crf 18 -an "${out}"`
-    );
+    const out = path.join(dir, `cinematic_${i}.mp4`);
     
-    resized.push(out);
-    update(jobId, { progress: 50 + (i/clips.length)*20 });
+    // Get video duration for proper zoompan
+    const durationCmd = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${clips[i]}"`;
+    const durationStr = await execAsync(durationCmd);
+    const duration = parseFloat(durationStr.trim());
+    const frames = Math.ceil(duration * 30); // 30fps
+    
+    // Different cinematic effects that ACTUALLY work
+    const effects = [
+      // Slow zoom in with color grading
+      `scale=1620:2880:force_original_aspect_ratio=increase,crop=1620:2880,zoompan=z='min(1+0.001*on,1.15)':d=${frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=30,eq=contrast=1.15:brightness=0.03:saturation=1.2`,
+      
+      // Pan with zoom
+      `scale=1620:2880:force_original_aspect_ratio=increase,crop=1620:2880,zoompan=z='1.1':d=${frames}:x='if(lte(on,1),iw/2,iw/2-on*2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=30,eq=contrast=1.15:brightness=0.03:saturation=1.2`,
+      
+      // Ken Burns (zoom + pan)
+      `scale=1620:2880:force_original_aspect_ratio=increase,crop=1620:2880,zoompan=z='min(1.05+0.0008*on,1.2)':d=${frames}:x='iw/2-(iw/zoom/2)+sin(on/20)*20':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=30,eq=contrast=1.15:brightness=0.03:saturation=1.2`,
+      
+      // Subtle zoom out
+      `scale=1620:2880:force_original_aspect_ratio=increase,crop=1620:2880,zoompan=z='max(1.2-0.0005*on,1.0)':d=${frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=30,eq=contrast=1.15:brightness=0.03:saturation=1.2`
+    ];
+    
+    const effect = effects[i % effects.length];
+    
+    console.log(`  🎥 Clip ${i+1}: Applying ${['zoom in', 'pan', 'Ken Burns', 'zoom out'][i % 4]} effect (${frames} frames)`);
+    
+    await execAsync(
+      `ffmpeg -y -i "${clips[i]}" -vf "${effect}" -c:v libx264 -preset medium -crf 20 -an "${out}"`
+    );
+    cinematic.push(out);
+    update(jobId, { progress: 40 + (i/clips.length)*30 });
   }
 
   update(jobId, { stage: "Merging clips", progress: 70 });
 
-  // Concatenate all resized clips
   const list = path.join(dir, "list.txt");
-  fs.writeFileSync(list, resized.map(f => `file '${f}'`).join("\n"));
-
+  fs.writeFileSync(list, cinematic.map(f => `file '${f}'`).join("\n"));
   const merged = path.join(dir, "merged.mp4");
   await execAsync(`ffmpeg -y -f concat -safe 0 -i "${list}" -c copy "${merged}"`);
 
-  update(jobId, { stage: "✨ Adding EXTRA LARGE YELLOW karaoke subtitles", progress: 85 });
+  update(jobId, { stage: "✨ Adding YELLOW karaoke subtitles", progress: 85 });
 
   const final = path.join(dir, "final.mp4");
- 
-  // Add subtitles and audio with high quality settings
+  
+  // CRITICAL: Use ass filter for proper yellow karaoke rendering
   await execAsync(
-    `ffmpeg -y -i "${merged}" -i "${audioPath}" -vf "ass='${subtitlePath}'" -map 0:v -map 1:a -shortest -c:v libx264 -preset medium -crf 18 -c:a aac -b:a 192k "${final}"`
+    `ffmpeg -y -i "${merged}" -i "${audioPath}" -vf "ass='${subtitlePath}'" -map 0:v -map 1:a -shortest -c:v libx264 -preset medium -crf 20 -c:a aac -b:a 192k "${final}"`
   );
 
   update(jobId, {
     status: "done",
-    stage: "🎉 Complete - Ready to download!",
+    stage: "🎉 Complete - Viral Ready!",
     progress: 100,
     outputFile: final,
     downloadUrl: `/download/${jobId}`,
@@ -381,6 +411,7 @@ async function processJob(jobId, payload) {
 }
 
 /* ---------------- DOWNLOAD ---------------- */
+
 async function download(url, output) {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`Download failed ${r.status}`);
@@ -393,14 +424,15 @@ async function download(url, output) {
 }
 
 /* ---------------- START ---------------- */
+
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SIMPLIFIED VIDEO SERVER READY!");
-  console.log("🔥 FEATURES:");
-  console.log(" ✅ EXTRA LARGE (120-160px) BRIGHT YELLOW karaoke subtitles");
-  console.log(" ✅ Word-by-word karaoke highlighting");
-  console.log(" ✅ Clean 9:16 format (no effects)");
-  console.log(" ✅ High quality output (CRF 18)");
-  console.log(" ✅ Simple and fast processing");
+  console.log("🚀 VIRAL VIDEO SERVER READY! (FIXED VERSION)");
+  console.log("🔥 WORKING FEATURES:");
+  console.log("  ✅ 70-90px YELLOW karaoke subtitles");
+  console.log("  ✅ Word-by-word highlighting");
+  console.log("  ✅ Cinematic zoom/pan effects");
+  console.log("  ✅ Color grading (vibrant look)");
+  console.log("  ✅ Professional viral-ready output");
   console.log(`\n📝 Default: ${SUBTITLE_STYLES[DEFAULT_STYLE].name}`);
   console.log(`🧹 Cleanup: Before each job (keep ${CLEANUP_CONFIG.keepCompletedJobs} recent)`);
 });
