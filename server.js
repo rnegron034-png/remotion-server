@@ -151,7 +151,6 @@ ${s.text}
 }
 
 function estimateWordTiming(sub) {
-  // If word-level timing not provided, estimate it
   const text = sub.text;
   const words = text.split(/\s+/).filter(w => w.length > 0);
   const duration = sub.end - sub.start;
@@ -165,12 +164,10 @@ function estimateWordTiming(sub) {
 }
 
 function buildKaraokeText(words, highlightColor) {
-  // Build karaoke effect with word-by-word color change
-  // \\k effect in ASS will progressively fill words from left to right
   let text = '';
   
   words.forEach((w, i) => {
-    const duration = Math.round((w.end - w.start) * 100); // centiseconds
+    const duration = Math.round((w.end - w.start) * 100);
     
     if (i === 0) {
       text += `{\\k${duration}}${w.word}`;
@@ -183,9 +180,8 @@ function buildKaraokeText(words, highlightColor) {
 }
 
 function subtitlesToAss(subs, styleConfig) {
-  // ASS header
   let ass = `[Script Info]
-Title: Karaoke Subtitles
+Title: Viral Karaoke Subtitles
 ScriptType: v4.00+
 WrapStyle: 0
 PlayResX: 1080
@@ -200,7 +196,6 @@ Style: Default,${styleConfig.fontname},${styleConfig.fontsize},${styleConfig.pri
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
 
-  // Process each subtitle
   subs.forEach((sub) => {
     const words = sub.words || estimateWordTiming(sub);
     const karaokeText = buildKaraokeText(words, styleConfig.secondaryColour);
@@ -211,25 +206,86 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   return ass;
 }
 
-/* ---------------- SUBTITLE STYLES WITH KARAOKE ---------------- */
+/* ---------------- VIRAL SUBTITLE STYLES ---------------- */
 
 const SUBTITLE_STYLES = {
-  // Karaoke styles - 40px centered
+  // 🔥 NEW VIRAL STYLES - BIGGER & BOLDER
+  viral: {
+    name: "Viral Style - 70px Yellow Karaoke (CENTER)",
+    useKaraoke: true,
+    config: {
+      fontname: "Poppins Black",
+      fontsize: 70,
+      primaryColour: "&H00FFFFFF",      // White (unsung)
+      secondaryColour: "&H0000FFFF",    // YELLOW (sung) - BGR format
+      outlineColour: "&H00000000",      // Black outline
+      backColour: "&H00000000",         
+      bold: 1,
+      borderStyle: 1,
+      outline: 4,                        // Thicker outline
+      shadow: 3,                         // Stronger shadow
+      alignment: 5,                      // Center
+      marginV: 0,
+      spacing: -35
+    }
+  },
+
+  viralBottom: {
+    name: "Viral Style - 70px Yellow Karaoke (BOTTOM)",
+    useKaraoke: true,
+    config: {
+      fontname: "Poppins Black",
+      fontsize: 70,
+      primaryColour: "&H00FFFFFF",
+      secondaryColour: "&H0000FFFF",    // YELLOW
+      outlineColour: "&H00000000",
+      backColour: "&H00000000",
+      bold: 1,
+      borderStyle: 1,
+      outline: 4,
+      shadow: 3,
+      alignment: 2,                      // Bottom center
+      marginV: 120,                      // Space from bottom
+      spacing: -35
+    }
+  },
+
+  viralHuge: {
+    name: "Viral Style - 90px MEGA Yellow Karaoke (CENTER)",
+    useKaraoke: true,
+    config: {
+      fontname: "Poppins Black",
+      fontsize: 90,
+      primaryColour: "&H00FFFFFF",
+      secondaryColour: "&H0000FFFF",    // YELLOW
+      outlineColour: "&H00000000",
+      backColour: "&H00000000",
+      bold: 1,
+      borderStyle: 1,
+      outline: 5,
+      shadow: 4,
+      alignment: 5,
+      marginV: 0,
+      spacing: -40
+    }
+  },
+
+  // Original karaoke styles (kept for compatibility)
   karaoke: {
     name: "Poppins 40px Karaoke Center (Yellow Highlight)",
     useKaraoke: true,
     config: {
       fontname: "Poppins SemiBold",
       fontsize: 40,
-      primaryColour: "&H00FFFFFF",      // White (unsung)
-      secondaryColour: "&H0000FFFF",    // Yellow (sung) - BGR format
-      outlineColour: "&H00000000",      // Black outline
-      backColour: "&H00000000",         // Transparent background
+      primaryColour: "&H00FFFFFF",
+      secondaryColour: "&H0000FFFF",
+      outlineColour: "&H00000000",
+      backColour: "&H00000000",
       bold: 1,
       borderStyle: 1,
       outline: 3,
       shadow: 2,
-      alignment: 5,                     // Center of screen
+      alignment: 5,
       marginV: 0,
       spacing: -30
     }
@@ -241,8 +297,8 @@ const SUBTITLE_STYLES = {
     config: {
       fontname: "Poppins SemiBold",
       fontsize: 40,
-      primaryColour: "&H00FFFFFF",      // White (unsung)
-      secondaryColour: "&H0000A5FF",    // Orange (sung)
+      primaryColour: "&H00FFFFFF",
+      secondaryColour: "&H0000A5FF",
       outlineColour: "&H00000000",
       backColour: "&H00000000",
       bold: 1,
@@ -269,13 +325,13 @@ const SUBTITLE_STYLES = {
       borderStyle: 1,
       outline: 3,
       shadow: 2,
-      alignment: 2,                     // Bottom center
+      alignment: 2,
       marginV: 80,
       spacing: -30
     }
   },
 
-  // Original non-karaoke styles for compatibility
+  // Non-karaoke styles
   default: {
     name: "Poppins 12px (tracking -30)",
     useKaraoke: false,
@@ -288,45 +344,15 @@ const SUBTITLE_STYLES = {
     style: `Fontname=Poppins SemiBold,Fontsize=14,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=45,Spacing=-30`
   },
 
-  boxed: {
-    name: "Poppins 12px Boxed (tracking -30)",
-    useKaraoke: false,
-    style: `Fontname=Poppins SemiBold,Fontsize=12,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&HC0000000&,Bold=1,BorderStyle=4,Outline=1,Shadow=1,Alignment=2,MarginV=40,Spacing=-30`
-  },
-
-  bold: {
-    name: "Poppins Bold 12px (tracking -30)",
-    useKaraoke: false,
-    style: `Fontname=Poppins Bold,Fontsize=12,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=40,Spacing=-30`
-  },
-
-  regular: {
-    name: "Poppins Regular 12px (tracking -30)",
-    useKaraoke: false,
-    style: `Fontname=Poppins,Fontsize=12,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=0,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=40,Spacing=-30`
-  },
-
   large: {
     name: "Poppins 16px (tracking -30)",
     useKaraoke: false,
     style: `Fontname=Poppins SemiBold,Fontsize=16,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=50,Spacing=-30`
-  },
-
-  highlight: {
-    name: "Poppins 12px Yellow (tracking -30)",
-    useKaraoke: false,
-    style: `Fontname=Poppins SemiBold,Fontsize=12,PrimaryColour=&H000000&,OutlineColour=&H000000&,BackColour=&H00FFFF&,Bold=1,BorderStyle=4,Outline=1,Shadow=0,Alignment=2,MarginV=40,Spacing=-30`
-  },
-
-  extraTight: {
-    name: "Poppins 12px (tracking -40)",
-    useKaraoke: false,
-    style: `Fontname=Poppins SemiBold,Fontsize=12,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=1,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=40,Spacing=-40`
   }
 };
 
-// DEFAULT: Karaoke with yellow highlight
-const DEFAULT_STYLE = 'karaoke';
+// 🔥 DEFAULT: Big viral style with yellow karaoke
+const DEFAULT_STYLE = 'viral';
 
 /* ---------------- API ---------------- */
 
@@ -433,7 +459,7 @@ app.get("/subtitle-styles", (req, res) => {
   res.json({ styles, default: DEFAULT_STYLE });
 });
 
-/* ---------------- JOB PIPELINE ---------------- */
+/* ---------------- JOB PIPELINE WITH CINEMATIC EFFECTS ---------------- */
 
 async function processJob(jobId, payload) {
   const dir = jobPath(jobId);
@@ -446,14 +472,14 @@ async function processJob(jobId, payload) {
   const styleData = SUBTITLE_STYLES[requestedStyle] || SUBTITLE_STYLES[DEFAULT_STYLE];
   const useKaraoke = styleData.useKaraoke || false;
 
-  console.log(`Using subtitle style: ${styleData.name} (Karaoke: ${useKaraoke})`);
+  console.log(`🎬 Using subtitle style: ${styleData.name} (Karaoke: ${useKaraoke})`);
 
   update(jobId, { status: "downloading", stage: "Downloading", progress: 5 });
 
   const audioPath = path.join(dir, "audio.mp3");
   await download(audioUrl, audioPath);
 
-  // Create subtitle file (ASS for karaoke, SRT for static)
+  // Create subtitle file
   let subtitlePath;
   if (useKaraoke) {
     subtitlePath = path.join(dir, "subs.ass");
@@ -469,34 +495,50 @@ async function processJob(jobId, payload) {
     const p = path.join(dir, `clip_${i}.mp4`);
     await download(scenes[i].src, p);
     clips.push(p);
-    update(jobId, { processedScenes: i + 1, progress: 10 + (i/scenes.length)*40 });
+    update(jobId, { processedScenes: i + 1, progress: 10 + (i/scenes.length)*30 });
   }
 
-  update(jobId, { status: "processing", stage: "Processing clips", progress: 50 });
+  update(jobId, { status: "processing", stage: "🎬 Adding cinematic effects", progress: 40 });
 
-  const fixed = [];
+  // 🎬 CINEMATIC PROCESSING WITH MOTION EFFECTS
+  const cinematic = [];
   for (let i = 0; i < clips.length; i++) {
-    const out = path.join(dir, `fixed_${i}.mp4`);
+    const out = path.join(dir, `cinematic_${i}.mp4`);
+    
+    // Different motion effects for variety
+    const effects = [
+      // Slow zoom in
+      `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(zoom+0.0015,1.2)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920`,
+      // Pan left to right
+      `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='1.1':d=1:x='if(lte(on,1),0,on*2)':y='ih/2-(ih/zoom/2)':s=1080x1920`,
+      // Zoom out slightly
+      `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='max(zoom-0.0005,1.0)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920`,
+      // Ken Burns effect
+      `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(1.1+0.001*on,1.2)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920`
+    ];
+    
+    const effect = effects[i % effects.length];
+    
     await execAsync(
-      `ffmpeg -y -i "${clips[i]}" -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" -r 30 -an -c:v libx264 -preset fast "${out}"`
+      `ffmpeg -y -i "${clips[i]}" -vf "${effect}" -r 30 -an -c:v libx264 -preset medium -crf 20 "${out}"`
     );
-    fixed.push(out);
-    update(jobId, { progress: 50 + (i/clips.length)*20 });
+    cinematic.push(out);
+    update(jobId, { progress: 40 + (i/clips.length)*30 });
   }
 
   update(jobId, { stage: "Merging clips", progress: 70 });
 
   const list = path.join(dir, "list.txt");
-  fs.writeFileSync(list, fixed.map(f => `file '${f}'`).join("\n"));
+  fs.writeFileSync(list, cinematic.map(f => `file '${f}'`).join("\n"));
   const merged = path.join(dir, "merged.mp4");
   await execAsync(`ffmpeg -y -f concat -safe 0 -i "${list}" -c copy "${merged}"`);
 
-  update(jobId, { stage: "Adding subtitles and audio", progress: 85 });
+  update(jobId, { stage: "✨ Adding subtitles and audio", progress: 80 });
 
   const final = path.join(dir, "final.mp4");
   const escapedSubPath = subtitlePath.replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/'/g, "'\\''");
   
-  // For ASS (karaoke), use ass filter. For SRT (static), use subtitles filter with force_style
+  // Subtitle filter
   let subtitleFilter;
   if (useKaraoke) {
     subtitleFilter = `ass='${escapedSubPath}'`;
@@ -504,13 +546,17 @@ async function processJob(jobId, payload) {
     subtitleFilter = `subtitles='${escapedSubPath}':force_style='${styleData.style}'`;
   }
   
+  // Final composition with color grading for cinematic look
+  const colorGrade = "eq=contrast=1.1:brightness=0.02:saturation=1.15";
+  const finalFilter = `${subtitleFilter},${colorGrade}`;
+  
   await execAsync(
-    `ffmpeg -y -i "${merged}" -i "${audioPath}" -vf "${subtitleFilter}" -map 0:v -map 1:a -shortest -c:v libx264 -preset medium -crf 23 -c:a aac -b:a 192k "${final}"`
+    `ffmpeg -y -i "${merged}" -i "${audioPath}" -vf "${finalFilter}" -map 0:v -map 1:a -shortest -c:v libx264 -preset medium -crf 20 -c:a aac -b:a 192k "${final}"`
   );
 
   update(jobId, {
     status: "done",
-    stage: "Complete",
+    stage: "🎉 Complete - Viral Ready!",
     progress: 100,
     outputFile: final,
     downloadUrl: `/download/${jobId}`,
@@ -534,10 +580,13 @@ async function download(url, output) {
 /* ---------------- START ---------------- */
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 Remotion server ready!");
-  console.log("🎤 Karaoke word-highlighting enabled!");
-  console.log("📝 Default: Poppins SemiBold, 40px CENTERED");
-  console.log("💛 Highlight: Yellow karaoke effect");
-  console.log("📏 Letter spacing: -30 (tight tracking)");
+  console.log("🚀 VIRAL VIDEO SERVER READY!");
+  console.log("🔥 NEW FEATURES:");
+  console.log("  📏 70-90px BIGGER subtitles");
+  console.log("  💛 YELLOW karaoke highlighting");
+  console.log("  🎬 Cinematic motion effects (zoom, pan, Ken Burns)");
+  console.log("  🎨 Color grading for professional look");
+  console.log("  ✨ Enhanced for viral social media clips");
+  console.log(`\n📝 Default style: ${SUBTITLE_STYLES[DEFAULT_STYLE].name}`);
   console.log(`🧹 Cleanup: Before each job (keep ${CLEANUP_CONFIG.keepCompletedJobs} recent)`);
 });
